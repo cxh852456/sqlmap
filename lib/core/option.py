@@ -127,6 +127,7 @@ from lib.core.settings import SQLMAP_ENVIRONMENT_PREFIX
 from lib.core.settings import SUPPORTED_DBMS
 from lib.core.settings import SUPPORTED_OS
 from lib.core.settings import TIME_DELAY_CANDIDATES
+from lib.core.settings import UNICODE_ENCODING
 from lib.core.settings import UNION_CHAR_REGEX
 from lib.core.settings import UNKNOWN_DBMS_VERSION
 from lib.core.settings import URI_INJECTABLE_REGEX
@@ -913,9 +914,9 @@ def _setTamperingFunctions():
                 sys.path.insert(0, dirname)
 
             try:
-                module = __import__(filename[:-3].encode(sys.getfilesystemencoding()))
-            except (ImportError, SyntaxError), msg:
-                raise SqlmapSyntaxException("cannot import tamper script '%s' (%s)" % (filename[:-3], msg))
+                module = __import__(filename[:-3].encode(sys.getfilesystemencoding() or UNICODE_ENCODING))
+            except (ImportError, SyntaxError), ex:
+                raise SqlmapSyntaxException("cannot import tamper script '%s' (%s)" % (filename[:-3], getSafeExString(ex)))
 
             priority = PRIORITY.NORMAL if not hasattr(module, '__priority__') else module.__priority__
 
@@ -997,6 +998,8 @@ def _setWafFunctions():
                 raise SqlmapGenericException(errMsg)
             else:
                 kb.wafFunctions.append((_["detect"], _.get("__product__", filename[:-3])))
+
+        kb.wafFunctions = sorted(kb.wafFunctions, key=lambda _: "generic" in _[1].lower())
 
 def _setThreads():
     if not isinstance(conf.threads, int) or conf.threads <= 0:
@@ -1546,18 +1549,36 @@ def _createTemporaryDirectory():
     Creates temporary directory for this run.
     """
 
-    try:
-        if not os.path.isdir(tempfile.gettempdir()):
-            os.makedirs(tempfile.gettempdir())
-    except IOError, ex:
-        errMsg = "there has been a problem while accessing "
-        errMsg += "system's temporary directory location(s) ('%s'). Please " % getSafeExString(ex)
-        errMsg += "make sure that there is enough disk space left. If problem persists, "
-        errMsg += "try to set environment variable 'TEMP' to a location "
-        errMsg += "writeable by the current user"
-        raise SqlmapSystemException, errMsg
+    if conf.tmpDir:
+        try:
+            if not os.path.isdir(conf.tmpDir):
+                os.makedirs(conf.tmpDir)
 
-    if "sqlmap" not in (tempfile.tempdir or ""):
+            _ = os.path.join(conf.tmpDir, randomStr())
+            open(_, "w+b").close()
+            os.remove(_)
+
+            tempfile.tempdir = conf.tmpDir
+
+            warnMsg = "using '%s' as the temporary directory" % conf.tmpDir
+            logger.warn(warnMsg)
+        except (OSError, IOError), ex:
+            errMsg = "there has been a problem while accessing "
+            errMsg += "temporary directory location(s) ('%s')" % getSafeExString(ex)
+            raise SqlmapSystemException, errMsg
+    else:
+        try:
+            if not os.path.isdir(tempfile.gettempdir()):
+                os.makedirs(tempfile.gettempdir())
+        except IOError, ex:
+            errMsg = "there has been a problem while accessing "
+            errMsg += "system's temporary directory location(s) ('%s'). Please " % getSafeExString(ex)
+            errMsg += "make sure that there is enough disk space left. If problem persists, "
+            errMsg += "try to set environment variable 'TEMP' to a location "
+            errMsg += "writeable by the current user"
+            raise SqlmapSystemException, errMsg
+
+    if "sqlmap" not in (tempfile.tempdir or "") or conf.tmpDir and tempfile.tempdir == conf.tmpDir:
         tempfile.tempdir = tempfile.mkdtemp(prefix="sqlmap", suffix=str(os.getpid()))
 
     kb.tempDir = tempfile.tempdir
@@ -1590,6 +1611,9 @@ def _cleanupOptions():
         conf.testParameter = re.split(PARAMETER_SPLITTING_REGEX, conf.testParameter)
     else:
         conf.testParameter = []
+
+    if conf.agent:
+        conf.agent = re.sub(r"[\r\n]", "", conf.agent)
 
     if conf.user:
         conf.user = conf.user.replace(" ", "")
@@ -1810,6 +1834,8 @@ def _setKnowledgeBaseAttributes(flushAll=True):
     kb.cache.regex = {}
     kb.cache.stdev = {}
 
+    kb.captchaDetected = None
+
     kb.chars = AttribDict()
     kb.chars.delimiter = randomStr(length=6, lowercase=True)
     kb.chars.start = "%s%s%s" % (KB_CHARS_BOUNDARY_CHAR, randomStr(length=3, alphabet=KB_CHARS_LOW_FREQUENCY_ALPHABET), KB_CHARS_BOUNDARY_CHAR)
@@ -1818,6 +1844,7 @@ def _setKnowledgeBaseAttributes(flushAll=True):
 
     kb.columnExistsChoice = None
     kb.commonOutputs = None
+    kb.cookieEncodeChoice = None
     kb.counters = {}
     kb.data = AttribDict()
     kb.dataOutputFlag = False
@@ -1850,6 +1877,7 @@ def _setKnowledgeBaseAttributes(flushAll=True):
     kb.headersFp = {}
     kb.heuristicDbms = None
     kb.heuristicMode = False
+    kb.heuristicPage = False
     kb.heuristicTest = None
     kb.hintValue = None
     kb.htmlFp = []
@@ -1908,6 +1936,7 @@ def _setKnowledgeBaseAttributes(flushAll=True):
     kb.reflectiveCounters = {REFLECTIVE_COUNTER.MISS: 0, REFLECTIVE_COUNTER.HIT: 0}
     kb.requestCounter = 0
     kb.resendPostOnRedirect = None
+    kb.resolutionDbms = None
     kb.responseTimes = {}
     kb.responseTimeMode = None
     kb.responseTimePayload = None
@@ -1922,6 +1951,7 @@ def _setKnowledgeBaseAttributes(flushAll=True):
     kb.storeCrawlingChoice = None
     kb.storeHashesChoice = None
     kb.suppressResumeInfo = False
+    kb.tableFrom = None
     kb.technique = None
     kb.tempDir = None
     kb.testMode = False
@@ -2542,6 +2572,7 @@ def _resolveCrossReferences():
     lib.request.connect.setHTTPHandlers = _setHTTPHandlers
     lib.utils.search.setHTTPHandlers = _setHTTPHandlers
     lib.controller.checks.setVerbosity = setVerbosity
+    lib.controller.checks.setWafFunctions = _setWafFunctions
 
 def initOptions(inputOptions=AttribDict(), overrideOptions=False):
     _setConfAttributes()

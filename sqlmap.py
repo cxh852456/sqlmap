@@ -13,6 +13,7 @@ from lib.utils import versioncheck  # this has to be the first non-standard impo
 
 import bdb
 import distutils
+import glob
 import inspect
 import logging
 import os
@@ -45,6 +46,7 @@ try:
     from lib.core.data import kb
     from lib.core.data import paths
     from lib.core.common import unhandledExceptionMessage
+    from lib.core.common import MKSTEMP_PREFIX
     from lib.core.exception import SqlmapBaseException
     from lib.core.exception import SqlmapShellQuitException
     from lib.core.exception import SqlmapSilentQuitException
@@ -52,9 +54,11 @@ try:
     from lib.core.option import initOptions
     from lib.core.option import init
     from lib.core.profiling import profile
+    from lib.core.settings import GIT_PAGE
     from lib.core.settings import IS_WIN
     from lib.core.settings import LEGAL_DISCLAIMER
     from lib.core.settings import THREAD_FINALIZATION_TIMEOUT
+    from lib.core.settings import UNICODE_ENCODING
     from lib.core.settings import VERSION
     from lib.core.testing import smokeTest
     from lib.core.testing import liveTest
@@ -78,7 +82,7 @@ def modulePath():
     except NameError:
         _ = inspect.getsourcefile(modulePath)
 
-    return getUnicode(os.path.dirname(os.path.realpath(_)), encoding=sys.getfilesystemencoding())
+    return getUnicode(os.path.dirname(os.path.realpath(_)), encoding=sys.getfilesystemencoding() or UNICODE_ENCODING)
 
 def checkEnvironment():
     paths.SQLMAP_ROOT_PATH = modulePath()
@@ -197,6 +201,18 @@ def main():
                 logger.error(errMsg)
                 raise SystemExit
 
+            elif all(_ in excMsg for _ in ("No such file", "_'")):
+                errMsg = "corrupted installation detected ('%s'). " % excMsg.strip().split('\n')[-1]
+                errMsg += "You should retrieve the latest development version from official GitHub "
+                errMsg += "repository at '%s'" % GIT_PAGE
+                logger.error(errMsg)
+                raise SystemExit
+
+            elif "Read-only file system" in excMsg:
+                errMsg = "output device is mounted as read-only"
+                logger.error(errMsg)
+                raise SystemExit
+
             elif "_mkstemp_inner" in excMsg:
                 errMsg = "there has been a problem while accessing temporary files"
                 logger.error(errMsg)
@@ -248,13 +264,21 @@ def main():
 
     finally:
         kb.threadContinue = False
-        kb.threadException = True
 
         if conf.get("showTime"):
             dataToStdout("\n[*] shutting down at %s\n\n" % time.strftime("%X"), forceOutput=True)
 
+        kb.threadException = True
+
         if kb.get("tempDir"):
-            shutil.rmtree(kb.tempDir, ignore_errors=True)
+                for prefix in (MKSTEMP_PREFIX.IPC, MKSTEMP_PREFIX.TESTING, MKSTEMP_PREFIX.COOKIE_JAR, MKSTEMP_PREFIX.BIG_ARRAY):
+                    for filepath in glob.glob(os.path.join(kb.tempDir, "%s*" % prefix)):
+                        try:
+                            os.remove(filepath)
+                        except OSError:
+                            pass
+                if not filter(None, (filepath for filepath in glob.glob(os.path.join(kb.tempDir, '*')) if not any(filepath.endswith(_) for _ in ('.lock', '.exe', '_')))):
+                    shutil.rmtree(kb.tempDir, ignore_errors=True)
 
         if conf.get("hashDB"):
             try:

@@ -72,6 +72,7 @@ from lib.core.enums import EXPECTED
 from lib.core.enums import HEURISTIC_TEST
 from lib.core.enums import HTTP_HEADER
 from lib.core.enums import HTTPMETHOD
+from lib.core.enums import MKSTEMP_PREFIX
 from lib.core.enums import OS
 from lib.core.enums import PLACE
 from lib.core.enums import PAYLOAD
@@ -103,6 +104,7 @@ from lib.core.settings import DEFAULT_MSSQL_SCHEMA
 from lib.core.settings import DUMMY_USER_INJECTION
 from lib.core.settings import DYNAMICITY_MARK_LENGTH
 from lib.core.settings import ERROR_PARSING_REGEXES
+from lib.core.settings import FILE_PATH_REGEXES
 from lib.core.settings import FORCE_COOKIE_EXPIRATION_TIME
 from lib.core.settings import FORM_SEARCH_REGEX
 from lib.core.settings import GENERIC_DOC_ROOT_DIRECTORY_NAMES
@@ -318,6 +320,8 @@ class Backend:
                 _ = readInput(msg, default=kb.dbms)
 
                 if aliasToDbmsEnum(_) == kb.dbms:
+                    kb.dbmsVersion = []
+                    kb.resolutionDbms = kb.dbms
                     break
                 elif aliasToDbmsEnum(_) == dbms:
                     kb.dbms = aliasToDbmsEnum(_)
@@ -729,7 +733,7 @@ def getManualDirectories():
         infoMsg = "retrieved the web server document root: '%s'" % directories
         logger.info(infoMsg)
     else:
-        warnMsg = "unable to retrieve automatically the web server "
+        warnMsg = "unable to automatically retrieve the web server "
         warnMsg += "document root"
         logger.warn(warnMsg)
 
@@ -929,7 +933,6 @@ def dataToDumpFile(dumpFile, data):
         else:
             raise
 
-
 def dataToOutFile(filename, data):
     retVal = None
 
@@ -937,8 +940,8 @@ def dataToOutFile(filename, data):
         retVal = os.path.join(conf.filePath, filePathToSafeString(filename))
 
         try:
-            with open(retVal, "w+b") as f:
-                f.write(data)
+            with open(retVal, "w+b") as f:  # has to stay as non-codecs because data is raw ASCII encoded data
+                f.write(unicodeencode(data))
         except IOError, ex:
             errMsg = "something went wrong while trying to write "
             errMsg += "to the output file ('%s')" % getSafeExString(ex)
@@ -1008,9 +1011,13 @@ def readInput(message, default=None, checkBatch=True):
                 retVal = raw_input() or default
                 retVal = getUnicode(retVal, encoding=sys.stdin.encoding) if retVal else retVal
             except:
-                time.sleep(0.05)  # Reference: http://www.gossamer-threads.com/lists/python/python/781893
-                kb.prependFlag = True
-                raise SqlmapUserQuitException
+                try:
+                    time.sleep(0.05)  # Reference: http://www.gossamer-threads.com/lists/python/python/781893
+                except:
+                    pass
+                finally:
+                    kb.prependFlag = True
+                    raise SqlmapUserQuitException
 
             finally:
                 logging._releaseLock()
@@ -1193,7 +1200,7 @@ def setPaths():
     paths.SQLMAP_XML_PAYLOADS_PATH = os.path.join(paths.SQLMAP_XML_PATH, "payloads")
 
     _ = os.path.join(os.path.expandvars(os.path.expanduser("~")), ".sqlmap")
-    paths.SQLMAP_OUTPUT_PATH = getUnicode(paths.get("SQLMAP_OUTPUT_PATH", os.path.join(_, "output")), encoding=sys.getfilesystemencoding())
+    paths.SQLMAP_OUTPUT_PATH = getUnicode(paths.get("SQLMAP_OUTPUT_PATH", os.path.join(_, "output")), encoding=sys.getfilesystemencoding() or UNICODE_ENCODING)
     paths.SQLMAP_DUMP_PATH = os.path.join(paths.SQLMAP_OUTPUT_PATH, "%s", "dump")
     paths.SQLMAP_FILES_PATH = os.path.join(paths.SQLMAP_OUTPUT_PATH, "%s", "files")
 
@@ -1395,6 +1402,10 @@ def parseTargetUrl():
     else:
         conf.port = 80
 
+    if conf.port < 0 or conf.port > 65535:
+        errMsg = "invalid target URL's port (%d)" % conf.port
+        raise SqlmapSyntaxException(errMsg)
+
     conf.url = getUnicode("%s://%s:%d%s" % (conf.scheme, ("[%s]" % conf.hostname) if conf.ipv6 else conf.hostname, conf.port, conf.path))
     conf.url = conf.url.replace(URI_QUESTION_MARKER, '?')
 
@@ -1533,7 +1544,7 @@ def parseFilePaths(page):
     """
 
     if page:
-        for regex in (r" in <b>(?P<result>.*?)</b> on line", r"(?:>|\s)(?P<result>[A-Za-z]:[\\/][\w.\\/]*)", r"(?:>|\s)(?P<result>/\w[/\w.]+)"):
+        for regex in FILE_PATH_REGEXES:
             for match in re.finditer(regex, page):
                 absFilePath = match.group("result").strip()
                 page = page.replace(absFilePath, "")
@@ -1967,8 +1978,8 @@ def readCachedFileContent(filename, mode='rb'):
             if filename not in kb.cache.content:
                 checkFile(filename)
                 try:
-	                with openFile(filename, mode) as f:
-	                    kb.cache.content[filename] = f.read()
+                    with openFile(filename, mode) as f:
+                        kb.cache.content[filename] = f.read()
                 except (IOError, OSError, MemoryError), ex:
                     errMsg = "something went wrong while trying "
                     errMsg += "to read the content of file '%s' ('%s')" % (filename, getSafeExString(ex))
@@ -3334,7 +3345,7 @@ def safeSQLIdentificatorNaming(name, isTable=False):
                 retVal = "\"%s\"" % retVal.strip("\"")
             elif Backend.getIdentifiedDbms() in (DBMS.ORACLE,):
                 retVal = "\"%s\"" % retVal.strip("\"").upper()
-            elif Backend.getIdentifiedDbms() in (DBMS.MSSQL,) and not re.match(r"\A\w+\Z", retVal, re.U):
+            elif Backend.getIdentifiedDbms() in (DBMS.MSSQL,) and ((retVal or " ")[0].isdigit() or not re.match(r"\A\w+\Z", retVal, re.U)):
                 retVal = "[%s]" % retVal.strip("[]")
 
         if _ and DEFAULT_MSSQL_SCHEMA not in retVal and '.' not in re.sub(r"\[[^]]+\]", "", retVal):
@@ -3973,7 +3984,7 @@ def resetCookieJar(cookieJar):
 
                 content = readCachedFileContent(conf.loadCookies)
                 lines = filter(None, (line.strip() for line in content.split("\n") if not line.startswith('#')))
-                handle, filename = tempfile.mkstemp(prefix="sqlmapcj-")
+                handle, filename = tempfile.mkstemp(prefix=MKSTEMP_PREFIX.COOKIE_JAR)
                 os.close(handle)
 
                 # Reference: http://www.hashbangcode.com/blog/netscape-http-cooke-file-parser-php-584.html

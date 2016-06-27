@@ -10,14 +10,14 @@ import re
 from lib.core.enums import HTTP_HEADER
 from lib.core.settings import WAF_ATTACK_VECTORS
 
-__product__ = "EdgeCast WAF (Verizon)"
+__product__ = "Wallarm Web Application Firewall (Wallarm)"
 
 def detect(get_page):
     retval = False
 
     for vector in WAF_ATTACK_VECTORS:
-        _, headers, code = get_page(get=vector)
-        retval = code == 400 and re.search(r"\AECDF", headers.get(HTTP_HEADER.SERVER, ""), re.I) is not None
+        _, headers, _ = get_page(get=vector)
+        retval = re.search(r"nginx-wallarm", headers.get(HTTP_HEADER.SERVER, ""), re.I) is not None
         if retval:
             break
 
