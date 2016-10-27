@@ -116,7 +116,7 @@ class Web:
                 multipartParams['__EVENTVALIDATION'] = kb.data.__EVENTVALIDATION
                 multipartParams['__VIEWSTATE'] = kb.data.__VIEWSTATE
 
-            page = Request.getPage(url=self.webStagerUrl, multipart=multipartParams, raise404=False)
+            page, _, _ = Request.getPage(url=self.webStagerUrl, multipart=multipartParams, raise404=False)
 
             if "File uploaded" not in page:
                 warnMsg = "unable to upload the file through the web file "
@@ -200,6 +200,15 @@ class Web:
         directories.extend(getAutoDirectories())
         directories = list(oset(directories))
 
+        path = urlparse.urlparse(conf.url).path or '/'
+        if path != '/':
+            _ = []
+            for directory in directories:
+                _.append(directory)
+                if not directory.endswith(path):
+                    _.append("%s/%s" % (directory.rstrip('/'), path.strip('/')))
+            directories = _
+
         backdoorName = "tmpb%s.%s" % (randomStr(lowercase=True), self.webApi)
         backdoorContent = decloak(os.path.join(paths.SQLMAP_SHELL_PATH, "backdoor.%s_" % self.webApi))
 
@@ -217,8 +226,6 @@ class Web:
 
             if not isWindowsDriveLetterPath(directory) and not directory.startswith('/'):
                 directory = "/%s" % directory
-            else:
-                directory = directory[2:] if isWindowsDriveLetterPath(directory) else directory
 
             if not directory.endswith('/'):
                 directory += '/'

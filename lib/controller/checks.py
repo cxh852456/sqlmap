@@ -74,6 +74,7 @@ from lib.core.settings import IDS_WAF_CHECK_RATIO
 from lib.core.settings import IDS_WAF_CHECK_TIMEOUT
 from lib.core.settings import MAX_DIFFLIB_SEQUENCE_LENGTH
 from lib.core.settings import NON_SQLI_CHECK_PREFIX_SUFFIX_LENGTH
+from lib.core.settings import SLEEP_TIME_MARKER
 from lib.core.settings import SUHOSIN_MAX_VALUE_LENGTH
 from lib.core.settings import SUPPORTED_DBMS
 from lib.core.settings import URI_HTTP_HEADER
@@ -93,6 +94,13 @@ def checkSqlInjection(place, parameter, value):
 
     # Localized thread data needed for some methods
     threadData = getCurrentThreadData()
+
+    # Favoring non-string specific boundaries in case of digit-like parameter values
+    if value.isdigit():
+        kb.cache.intBoundaries = kb.cache.intBoundaries or sorted(copy.deepcopy(conf.boundaries), key=lambda boundary: any(_ in (boundary.prefix or "") or _ in (boundary.suffix or "") for _ in ('"', '\'')))
+        boundaries = kb.cache.intBoundaries
+    else:
+        boundaries = conf.boundaries
 
     # Set the flag for SQL injection test mode
     kb.testMode = True
@@ -149,6 +157,7 @@ def checkSqlInjection(place, parameter, value):
             kb.testType = stype = test.stype
             clause = test.clause
             unionExtended = False
+            trueCode, falseCode = None, None
 
             if stype == PAYLOAD.TECHNIQUE.UNION:
                 configUnion(test.request.char)
@@ -310,12 +319,6 @@ def checkSqlInjection(place, parameter, value):
             # Parse test's <request>
             comment = agent.getComment(test.request) if len(conf.boundaries) > 1 else None
             fstPayload = agent.cleanupPayload(test.request.payload, origValue=value if place not in (PLACE.URI, PLACE.CUSTOM_POST, PLACE.CUSTOM_HEADER) else None)
-
-            # Favoring non-string specific boundaries in case of digit-like parameter values
-            if value.isdigit():
-                boundaries = sorted(copy.deepcopy(conf.boundaries), key=lambda x: any(_ in (x.prefix or "") or _ in (x.suffix or "") for _ in ('"', '\'')))
-            else:
-                boundaries = conf.boundaries
 
             for boundary in boundaries:
                 injectable = False
@@ -519,7 +522,7 @@ def checkSqlInjection(place, parameter, value):
 
                                 if not any((conf.string, conf.notString, conf.code)):
                                     infoMsg = "%s parameter '%s' appears to be '%s' injectable " % (paramType, parameter, title)
-                                    logger.info(infoMsg)
+                                    singleTimeLogMessage(infoMsg)
 
                         # In case of error-based SQL injection
                         elif method == PAYLOAD.METHOD.GREP:
@@ -555,8 +558,15 @@ def checkSqlInjection(place, parameter, value):
                         elif method == PAYLOAD.METHOD.TIME:
                             # Perform the test's request
                             trueResult = Request.queryPage(reqPayload, place, timeBasedCompare=True, raise404=False)
+                            trueCode = threadData.lastCode
 
                             if trueResult:
+                                # Extra validation step (e.g. to check for DROP protection mechanisms)
+                                if SLEEP_TIME_MARKER in reqPayload:
+                                    falseResult = Request.queryPage(reqPayload.replace(SLEEP_TIME_MARKER, "0"), place, timeBasedCompare=True, raise404=False)
+                                    if falseResult:
+                                        continue
+
                                 # Confirm test's results
                                 trueResult = Request.queryPage(reqPayload, place, timeBasedCompare=True, raise404=False)
 
@@ -667,6 +677,8 @@ def checkSqlInjection(place, parameter, value):
                         injection.data[stype].comment = comment
                         injection.data[stype].templatePayload = templatePayload
                         injection.data[stype].matchRatio = kb.matchRatio
+                        injection.data[stype].trueCode = trueCode
+                        injection.data[stype].falseCode = falseCode
 
                         injection.conf.textOnly = conf.textOnly
                         injection.conf.titles = conf.titles
@@ -921,7 +933,7 @@ def heuristicCheckSqlInjection(place, parameter):
 
     randStr = ""
 
-    while '\'' not in randStr:
+    while randStr.count('\'') != 1 or randStr.count('\"') != 1:
         randStr = randomStr(length=10, alphabet=HEURISTIC_CHECK_ALPHABET)
 
     kb.heuristicMode = True
@@ -1317,11 +1329,11 @@ def identifyWaf():
             kb.redirectChoice = popValue()
         return page or "", headers or {}, code
 
-    retVal = False
+    retVal = []
 
     for function, product in kb.wafFunctions:
         try:
-            logger.debug("checking for WAF/IDS/IPS product '%s'" % product)
+            logger.debug("checking for WAF/IPS/IDS product '%s'" % product)
             found = function(_)
         except Exception, ex:
             errMsg = "exception occurred while running "
@@ -1331,22 +1343,24 @@ def identifyWaf():
             found = False
 
         if found:
-            retVal = product
-            break
+            errMsg = "WAF/IPS/IDS identified as '%s'" % product
+            logger.critical(errMsg)
+
+            retVal.append(product)
 
     if retVal:
-        errMsg = "WAF/IDS/IPS identified as '%s'. Please " % retVal
-        errMsg += "consider usage of tamper scripts (option '--tamper')"
-        logger.critical(errMsg)
-
         message = "are you sure that you want to "
         message += "continue with further target testing? [y/N] "
         output = readInput(message, default="N")
 
+        if not conf.tamper:
+            warnMsg = "please consider usage of tamper scripts (option '--tamper')"
+            singleTimeWarnMessage(warnMsg)
+
         if output and output[0] not in ("Y", "y"):
             raise SqlmapUserQuitException
     else:
-        warnMsg = "WAF/IDS/IPS product hasn't been identified"
+        warnMsg = "WAF/IPS/IDS product hasn't been identified"
         logger.warn(warnMsg)
 
     kb.testType = None
@@ -1374,7 +1388,7 @@ def checkNullConnection():
         if not page and HTTP_HEADER.CONTENT_LENGTH in (headers or {}):
             kb.nullConnection = NULLCONNECTION.HEAD
 
-            infoMsg = "NULL connection is supported with HEAD header"
+            infoMsg = "NULL connection is supported with HEAD method (Content-Length)"
             logger.info(infoMsg)
         else:
             page, headers, _ = Request.getPage(auxHeaders={HTTP_HEADER.RANGE: "bytes=-1"})
@@ -1382,7 +1396,7 @@ def checkNullConnection():
             if page and len(page) == 1 and HTTP_HEADER.CONTENT_RANGE in (headers or {}):
                 kb.nullConnection = NULLCONNECTION.RANGE
 
-                infoMsg = "NULL connection is supported with GET header "
+                infoMsg = "NULL connection is supported with GET method (Range)"
                 infoMsg += "'%s'" % kb.nullConnection
                 logger.info(infoMsg)
             else:

@@ -43,6 +43,7 @@ from lib.core.settings import GENERIC_SQL_COMMENT
 from lib.core.settings import NULL
 from lib.core.settings import PAYLOAD_DELIMITER
 from lib.core.settings import REPLACEMENT_MARKER
+from lib.core.settings import SLEEP_TIME_MARKER
 from lib.core.unescaper import unescaper
 
 class Agent(object):
@@ -120,7 +121,7 @@ class Agent(object):
         elif place == PLACE.CUSTOM_HEADER:
             paramString = origValue
             origValue = origValue.split(CUSTOM_INJECTION_MARK_CHAR)[0]
-            origValue = origValue[origValue.index(',') + 1:]
+            origValue = origValue[origValue.find(',') + 1:]
             match = re.search(r"([^;]+)=(?P<value>[^;]+);?\Z", origValue)
             if match:
                 origValue = match.group("value")
@@ -343,7 +344,7 @@ class Agent(object):
         """
 
         if payload:
-            payload = payload.replace("[SLEEPTIME]", str(conf.timeSec))
+            payload = payload.replace(SLEEP_TIME_MARKER, str(conf.timeSec))
 
         return payload
 
@@ -486,7 +487,7 @@ class Agent(object):
         @rtype: C{str}
         """
 
-        prefixRegex = r"(?:\s+(?:FIRST|SKIP|LIMIT \d+)\s+\d+)*"
+        prefixRegex = r"(?:\s+(?:FIRST|SKIP|LIMIT(?: \d+)?)\s+\d+)*"
         fieldsSelectTop = re.search(r"\ASELECT\s+TOP\s+[\d]+\s+(.+?)\s+FROM", query, re.I)
         fieldsSelectRownum = re.search(r"\ASELECT\s+([^()]+?),\s*ROWNUM AS LIMIT FROM", query, re.I)
         fieldsSelectDistinct = re.search(r"\ASELECT%s\s+DISTINCT\((.+?)\)\s+FROM" % prefixRegex, query, re.I)
@@ -507,26 +508,26 @@ class Agent(object):
         if fieldsSubstr:
             fieldsToCastStr = query
         elif fieldsMinMaxstr:
-            fieldsToCastStr = fieldsMinMaxstr.groups()[0]
+            fieldsToCastStr = fieldsMinMaxstr.group(1)
         elif fieldsExists:
             if fieldsSelect:
-                fieldsToCastStr = fieldsSelect.groups()[0]
+                fieldsToCastStr = fieldsSelect.group(1)
         elif fieldsSelectTop:
-            fieldsToCastStr = fieldsSelectTop.groups()[0]
+            fieldsToCastStr = fieldsSelectTop.group(1)
         elif fieldsSelectRownum:
-            fieldsToCastStr = fieldsSelectRownum.groups()[0]
+            fieldsToCastStr = fieldsSelectRownum.group(1)
         elif fieldsSelectDistinct:
             if Backend.getDbms() in (DBMS.HSQLDB,):
                 fieldsToCastStr = fieldsNoSelect
             else:
-                fieldsToCastStr = fieldsSelectDistinct.groups()[0]
+                fieldsToCastStr = fieldsSelectDistinct.group(1)
         elif fieldsSelectCase:
-            fieldsToCastStr = fieldsSelectCase.groups()[0]
+            fieldsToCastStr = fieldsSelectCase.group(1)
         elif fieldsSelectFrom:
             fieldsToCastStr = query[:unArrayizeValue(_)] if _ else query
             fieldsToCastStr = re.sub(r"\ASELECT%s\s+" % prefixRegex, "", fieldsToCastStr)
         elif fieldsSelect:
-            fieldsToCastStr = fieldsSelect.groups()[0]
+            fieldsToCastStr = fieldsSelect.group(1)
 
         # Function
         if re.search("\A\w+\(.*\)", fieldsToCastStr, re.I) or (fieldsSelectCase and "WHEN use" not in query) or fieldsSubstr:
@@ -667,24 +668,23 @@ class Agent(object):
                 concatenatedQuery = "'%s'&%s&'%s'" % (kb.chars.start, concatenatedQuery, kb.chars.stop)
 
         else:
-            warnMsg = "applying generic concatenation with double pipes ('||')"
+            warnMsg = "applying generic concatenation (CONCAT)"
             singleTimeWarnMessage(warnMsg)
 
             if fieldsExists:
-                concatenatedQuery = concatenatedQuery.replace("SELECT ", "'%s'||" % kb.chars.start, 1)
-                concatenatedQuery += "||'%s'" % kb.chars.stop
+                concatenatedQuery = concatenatedQuery.replace("SELECT ", "CONCAT(CONCAT('%s'," % kb.chars.start, 1)
+                concatenatedQuery += "),'%s')" % kb.chars.stop
             elif fieldsSelectCase:
-                concatenatedQuery = concatenatedQuery.replace("SELECT ", "'%s'||(SELECT " % kb.chars.start, 1)
-                concatenatedQuery += ")||'%s'" % kb.chars.stop
+                concatenatedQuery = concatenatedQuery.replace("SELECT ", "CONCAT(CONCAT('%s'," % kb.chars.start, 1)
+                concatenatedQuery += "),'%s')" % kb.chars.stop
             elif fieldsSelectFrom:
-                concatenatedQuery = concatenatedQuery.replace("SELECT ", "'%s'||" % kb.chars.start, 1)
                 _ = unArrayizeValue(zeroDepthSearch(concatenatedQuery, " FROM "))
-                concatenatedQuery = "%s||'%s'%s" % (concatenatedQuery[:_], kb.chars.stop, concatenatedQuery[_:])
+                concatenatedQuery = "%s),'%s')%s" % (concatenatedQuery[:_].replace("SELECT ", "CONCAT(CONCAT('%s'," % kb.chars.start, 1), kb.chars.stop, concatenatedQuery[_:])
             elif fieldsSelect:
-                concatenatedQuery = concatenatedQuery.replace("SELECT ", "'%s'||" % kb.chars.start, 1)
-                concatenatedQuery += "||'%s'" % kb.chars.stop
+                concatenatedQuery = concatenatedQuery.replace("SELECT ", "CONCAT(CONCAT('%s'," % kb.chars.start, 1)
+                concatenatedQuery += "),'%s')" % kb.chars.stop
             elif fieldsNoSelect:
-                concatenatedQuery = "'%s'||%s||'%s'" % (kb.chars.start, concatenatedQuery, kb.chars.stop)
+                concatenatedQuery = "CONCAT(CONCAT('%s',%s),'%s')" % (kb.chars.start, concatenatedQuery, kb.chars.stop)
 
         return concatenatedQuery
 

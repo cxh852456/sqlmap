@@ -26,6 +26,7 @@ from lib.core.settings import MAX_RATIO
 from lib.core.settings import REFLECTED_VALUE_MARKER
 from lib.core.settings import LOWER_RATIO_BOUND
 from lib.core.settings import UPPER_RATIO_BOUND
+from lib.core.settings import URI_HTTP_HEADER
 from lib.core.threads import getCurrentThreadData
 
 def comparison(page, headers, code=None, getRatioValue=False, pageLength=None):
@@ -48,18 +49,15 @@ def _comparison(page, headers, code, getRatioValue, pageLength):
     threadData = getCurrentThreadData()
 
     if kb.testMode:
-        threadData.lastComparisonHeaders = listToStrValue(headers.headers) if headers else ""
+        threadData.lastComparisonHeaders = listToStrValue([_ for _ in headers.headers if not _.startswith("%s:" % URI_HTTP_HEADER)]) if headers else ""
         threadData.lastComparisonPage = page
         threadData.lastComparisonCode = code
 
     if page is None and pageLength is None:
         return None
 
-    seqMatcher = threadData.seqMatcher
-    seqMatcher.set_seq1(kb.pageTemplate)
-
     if any((conf.string, conf.notString, conf.regexp)):
-        rawResponse = "%s%s" % (listToStrValue(headers.headers) if headers else "", page)
+        rawResponse = "%s%s" % (listToStrValue([_ for _ in headers.headers if not _.startswith("%s:" % URI_HTTP_HEADER)]) if headers else "", page)
 
         # String to match in page when the query is True and/or valid
         if conf.string:
@@ -76,6 +74,9 @@ def _comparison(page, headers, code, getRatioValue, pageLength):
     # HTTP code to match when the query is valid
     if conf.code:
         return conf.code == code
+
+    seqMatcher = threadData.seqMatcher
+    seqMatcher.set_seq1(kb.pageTemplate)
 
     if page:
         # In case of an DBMS error page return None

@@ -487,7 +487,7 @@ def start():
                             check = checkDynParam(place, parameter, value)
 
                             if not check:
-                                warnMsg = "%s parameter '%s' does not appear dynamic" % (paramType, parameter)
+                                warnMsg = "%s parameter '%s' does not appear to be dynamic" % (paramType, parameter)
                                 logger.warn(warnMsg)
 
                                 if conf.skipStatic:
@@ -545,7 +545,7 @@ def start():
                                             kb.testedParams.add(paramKey)
 
                                 if not injectable:
-                                    warnMsg = "%s parameter '%s' is not " % (paramType, parameter)
+                                    warnMsg = "%s parameter '%s' does not seem to be " % (paramType, parameter)
                                     warnMsg += "injectable"
                                     logger.warn(warnMsg)
 
@@ -662,7 +662,7 @@ def start():
                 _saveToResultsFile()
 
                 errMsg += ", skipping to the next %s" % ("form" if conf.forms else "URL")
-                logger.error(errMsg)
+                logger.error(errMsg.lstrip(", "))
             else:
                 logger.critical(errMsg)
                 return False

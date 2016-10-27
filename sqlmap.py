@@ -34,6 +34,7 @@ from lib.core.data import logger
 try:
     from lib.controller.controller import start
     from lib.core.common import banner
+    from lib.core.common import checkIntegrity
     from lib.core.common import createGithubIssue
     from lib.core.common import dataToStdout
     from lib.core.common import getSafeExString
@@ -44,7 +45,6 @@ try:
     from lib.core.data import cmdLineOptions
     from lib.core.data import conf
     from lib.core.data import kb
-    from lib.core.data import paths
     from lib.core.common import unhandledExceptionMessage
     from lib.core.common import MKSTEMP_PREFIX
     from lib.core.exception import SqlmapBaseException
@@ -63,8 +63,6 @@ try:
     from lib.core.testing import smokeTest
     from lib.core.testing import liveTest
     from lib.parse.cmdline import cmdLineParser
-    from lib.utils.api import setRestAPILog
-    from lib.utils.api import StdDbOut
 except KeyboardInterrupt:
     errMsg = "user aborted"
     logger.error(errMsg)
@@ -85,10 +83,8 @@ def modulePath():
     return getUnicode(os.path.dirname(os.path.realpath(_)), encoding=sys.getfilesystemencoding() or UNICODE_ENCODING)
 
 def checkEnvironment():
-    paths.SQLMAP_ROOT_PATH = modulePath()
-
     try:
-        os.path.isdir(paths.SQLMAP_ROOT_PATH)
+        os.path.isdir(modulePath())
     except UnicodeEncodeError:
         errMsg = "your system does not properly handle non-ASCII paths. "
         errMsg += "Please move the sqlmap's directory to the other location"
@@ -103,6 +99,15 @@ def checkEnvironment():
         logger.critical(errMsg)
         raise SystemExit
 
+    # Patch for pip (import) environment
+    if "sqlmap.sqlmap" in sys.modules:
+        for _ in ("cmdLineOptions", "conf", "kb"):
+            globals()[_] = getattr(sys.modules["lib.core.data"], _)
+
+        for _ in ("SqlmapBaseException", "SqlmapShellQuitException", "SqlmapSilentQuitException", "SqlmapUserQuitException"):
+            globals()[_] = getattr(sys.modules["lib.core.exception"], _)
+
+
 def main():
     """
     Main function of sqlmap when running from command line.
@@ -111,7 +116,7 @@ def main():
     try:
         checkEnvironment()
 
-        setPaths()
+        setPaths(modulePath())
         banner()
 
         # Store original command line options for possible later restoration
@@ -119,6 +124,10 @@ def main():
         initOptions(cmdLineOptions)
 
         if hasattr(conf, "api"):
+            # heavy imports
+            from lib.utils.api import StdDbOut
+            from lib.utils.api import setRestAPILog
+
             # Overwrite system standard output and standard error to write
             # to an IPC database
             sys.stdout = StdDbOut(conf.taskid, messagetype="stdout")
@@ -196,7 +205,21 @@ def main():
         excMsg = traceback.format_exc()
 
         try:
-            if any(_ in excMsg for _ in ("No space left", "Disk quota exceeded")):
+            if not checkIntegrity():
+                errMsg = "code integrity check failed (turning off automatic issue creation). "
+                errMsg += "You should retrieve the latest development version from official GitHub "
+                errMsg += "repository at '%s'" % GIT_PAGE
+                logger.critical(errMsg)
+                print
+                dataToStdout(excMsg)
+                raise SystemExit
+
+            elif "MemoryError" in excMsg:
+                errMsg = "memory exhaustion detected"
+                logger.error(errMsg)
+                raise SystemExit
+
+            elif any(_ in excMsg for _ in ("No space left", "Disk quota exceeded")):
                 errMsg = "no space left on output device"
                 logger.error(errMsg)
                 raise SystemExit
@@ -210,6 +233,11 @@ def main():
 
             elif "Read-only file system" in excMsg:
                 errMsg = "output device is mounted as read-only"
+                logger.error(errMsg)
+                raise SystemExit
+
+            elif "OperationalError: disk I/O error" in excMsg:
+                errMsg = "I/O error on output device"
                 logger.error(errMsg)
                 raise SystemExit
 
@@ -294,7 +322,7 @@ def main():
 
         if hasattr(conf, "api"):
             try:
-                conf.database_cursor.disconnect()
+                conf.databaseCursor.disconnect()
             except KeyboardInterrupt:
                 pass
 
@@ -308,10 +336,10 @@ def main():
                 time.sleep(0.01)
         except KeyboardInterrupt:
             pass
-
-        # Reference: http://stackoverflow.com/questions/1635080/terminate-a-multi-thread-python-program
-        if threading.activeCount() > 1:
-            os._exit(0)
+        finally:
+            # Reference: http://stackoverflow.com/questions/1635080/terminate-a-multi-thread-python-program
+            if threading.activeCount() > 1:
+                os._exit(0)
 
 if __name__ == "__main__":
     main()

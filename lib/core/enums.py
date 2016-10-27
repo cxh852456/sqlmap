@@ -34,6 +34,7 @@ class DBMS:
     SQLITE = "SQLite"
     SYBASE = "Sybase"
     HSQLDB = "HSQLDB"
+    INFORMIX = "Informix"
 
 class DBMS_DIRECTORY_NAME:
     ACCESS = "access"
@@ -47,6 +48,7 @@ class DBMS_DIRECTORY_NAME:
     SQLITE = "sqlite"
     SYBASE = "sybase"
     HSQLDB = "hsqldb"
+    INFORMIX = "informix"
 
 class CUSTOM_LOGGING:
     PAYLOAD = 9
@@ -364,3 +366,8 @@ class MKSTEMP_PREFIX:
     RESULTS = "sqlmapresults-"
     COOKIE_JAR = "sqlmapcookiejar-"
     BIG_ARRAY = "sqlmapbigarray-"
+
+class TIMEOUT_STATE:
+    NORMAL = 0
+    EXCEPTION = 1
+    TIMEOUT = 2

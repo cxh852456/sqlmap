@@ -119,6 +119,7 @@ from lib.core.settings import IP_ADDRESS_REGEX
 from lib.core.settings import ISSUES_PAGE
 from lib.core.settings import IS_WIN
 from lib.core.settings import LARGE_OUTPUT_THRESHOLD
+from lib.core.settings import LOCALHOST
 from lib.core.settings import MIN_ENCODED_LEN_CHECK
 from lib.core.settings import MIN_TIME_RESPONSES
 from lib.core.settings import MIN_VALID_DELAYED_RESPONSE
@@ -695,8 +696,6 @@ def paramToDict(place, parameters=None):
 
 def getManualDirectories():
     directories = None
-    pagePath = directoryPath(conf.path)
-
     defaultDocRoot = DEFAULT_DOC_ROOTS.get(Backend.getOs(), DEFAULT_DOC_ROOTS[OS.LINUX])
 
     if kb.absFilePaths:
@@ -714,18 +713,18 @@ def getManualDirectories():
                 windowsDriveLetter, absFilePath = absFilePath[:2], absFilePath[2:]
                 absFilePath = ntToPosixSlashes(posixToNtSlashes(absFilePath))
 
-            if any("/%s/" % _ in absFilePath for _ in GENERIC_DOC_ROOT_DIRECTORY_NAMES):
-                for _ in GENERIC_DOC_ROOT_DIRECTORY_NAMES:
-                    _ = "/%s/" % _
+            for _ in list(GENERIC_DOC_ROOT_DIRECTORY_NAMES) + [conf.hostname]:
+                _ = "/%s/" % _
 
-                    if _ in absFilePath:
-                        directories = "%s%s" % (absFilePath.split(_)[0], _)
-                        break
+                if _ in absFilePath:
+                    directories = "%s%s" % (absFilePath.split(_)[0], _)
+                    break
 
-            if pagePath and pagePath in absFilePath:
-                directories = absFilePath.split(pagePath)[0]
-                if windowsDriveLetter:
-                    directories = "%s/%s" % (windowsDriveLetter, ntToPosixSlashes(directories))
+            if not directories and conf.path.strip('/') and conf.path in absFilePath:
+                directories = absFilePath.split(conf.path)[0]
+
+            if directories and windowsDriveLetter:
+                directories = "%s/%s" % (windowsDriveLetter, ntToPosixSlashes(directories))
 
     directories = normalizePath(directories)
 
@@ -815,11 +814,6 @@ def getAutoDirectories():
         warnMsg = "unable to automatically parse any web server path"
         logger.warn(warnMsg)
 
-    _ = extractRegexResult(r"//[^/]+?(?P<result>/.*)/", conf.url)  # web directory
-
-    if _:
-        retVal.add(_)
-
     return list(retVal)
 
 def filePathToSafeString(filePath):
@@ -892,12 +886,12 @@ def dataToStdout(data, forceOutput=False, bold=False, content_type=None, status=
             else:
                 message = data
 
-            if hasattr(conf, "api"):
-                sys.stdout.write(message, status, content_type)
-            else:
-                sys.stdout.write(setColor(message, bold))
-
             try:
+                if hasattr(conf, "api"):
+                    sys.stdout.write(message, status, content_type)
+                else:
+                    sys.stdout.write(setColor(message, bold))
+
                 sys.stdout.flush()
             except IOError:
                 pass
@@ -937,15 +931,26 @@ def dataToOutFile(filename, data):
     retVal = None
 
     if data:
-        retVal = os.path.join(conf.filePath, filePathToSafeString(filename))
+        while True:
+            retVal = os.path.join(conf.filePath, filePathToSafeString(filename))
 
-        try:
-            with open(retVal, "w+b") as f:  # has to stay as non-codecs because data is raw ASCII encoded data
-                f.write(unicodeencode(data))
-        except IOError, ex:
-            errMsg = "something went wrong while trying to write "
-            errMsg += "to the output file ('%s')" % getSafeExString(ex)
-            raise SqlmapGenericException(errMsg)
+            try:
+                with open(retVal, "w+b") as f:  # has to stay as non-codecs because data is raw ASCII encoded data
+                    f.write(unicodeencode(data))
+            except UnicodeEncodeError, ex:
+                _ = normalizeUnicode(filename)
+                if filename != _:
+                    filename = _
+                else:
+                    errMsg = "couldn't write to the "
+                    errMsg += "output file ('%s')" % getSafeExString(ex)
+                    raise SqlmapGenericException(errMsg)
+            except IOError, ex:
+                errMsg = "something went wrong while trying to write "
+                errMsg += "to the output file ('%s')" % getSafeExString(ex)
+                raise SqlmapGenericException(errMsg)
+            else:
+                break
 
     return retVal
 
@@ -1182,10 +1187,12 @@ def cleanQuery(query):
 
     return retVal
 
-def setPaths():
+def setPaths(rootPath):
     """
     Sets absolute paths for project directories and files
     """
+
+    paths.SQLMAP_ROOT_PATH = rootPath
 
     # sqlmap paths
     paths.SQLMAP_EXTRAS_PATH = os.path.join(paths.SQLMAP_ROOT_PATH, "extra")
@@ -1200,6 +1207,7 @@ def setPaths():
     paths.SQLMAP_XML_PAYLOADS_PATH = os.path.join(paths.SQLMAP_XML_PATH, "payloads")
 
     _ = os.path.join(os.path.expandvars(os.path.expanduser("~")), ".sqlmap")
+    paths.SQLMAP_HOME_PATH = _
     paths.SQLMAP_OUTPUT_PATH = getUnicode(paths.get("SQLMAP_OUTPUT_PATH", os.path.join(_, "output")), encoding=sys.getfilesystemencoding() or UNICODE_ENCODING)
     paths.SQLMAP_DUMP_PATH = os.path.join(paths.SQLMAP_OUTPUT_PATH, "%s", "dump")
     paths.SQLMAP_FILES_PATH = os.path.join(paths.SQLMAP_OUTPUT_PATH, "%s", "files")
@@ -1209,6 +1217,7 @@ def setPaths():
     paths.SQL_SHELL_HISTORY = os.path.join(_, "sql.hst")
     paths.SQLMAP_SHELL_HISTORY = os.path.join(_, "sqlmap.hst")
     paths.GITHUB_HISTORY = os.path.join(_, "github.hst")
+    paths.CHECKSUM_MD5 = os.path.join(paths.SQLMAP_TXT_PATH, "checksum.md5")
     paths.COMMON_COLUMNS = os.path.join(paths.SQLMAP_TXT_PATH, "common-columns.txt")
     paths.COMMON_TABLES = os.path.join(paths.SQLMAP_TXT_PATH, "common-tables.txt")
     paths.COMMON_OUTPUTS = os.path.join(paths.SQLMAP_TXT_PATH, 'common-outputs.txt')
@@ -1333,7 +1342,7 @@ def parseTargetDirect():
                 else:
                     errMsg = "sqlmap requires '%s' third-party library " % data[1]
                     errMsg += "in order to directly connect to the DBMS "
-                    errMsg += "%s. You can download it from '%s'" % (dbmsName, data[2])
+                    errMsg += "'%s'. You can download it from '%s'" % (dbmsName, data[2])
                     errMsg += ". Alternative is to use a package 'python-sqlalchemy' "
                     errMsg += "with support for dialect '%s' installed" % data[3]
                     raise SqlmapMissingDependence(errMsg)
@@ -2226,10 +2235,6 @@ def getUnicode(value, encoding=None, noneToNull=False):
     if noneToNull and value is None:
         return NULL
 
-    if isListLike(value):
-        value = list(getUnicode(_, encoding, noneToNull) for _ in value)
-        return value
-
     if isinstance(value, unicode):
         return value
     elif isinstance(value, basestring):
@@ -2241,6 +2246,9 @@ def getUnicode(value, encoding=None, noneToNull=False):
                     return unicode(value, UNICODE_ENCODING)
                 except:
                     value = value[:ex.start] + "".join(INVALID_UNICODE_CHAR_FORMAT % ord(_) for _ in value[ex.start:ex.end]) + value[ex.end:]
+    elif isListLike(value):
+        value = list(getUnicode(_, encoding, noneToNull) for _ in value)
+        return value
     else:
         try:
             return unicode(value)
@@ -2404,6 +2412,32 @@ def extractErrorMessage(page):
 
     return retVal
 
+def findLocalPort(ports):
+    """
+    Find the first opened localhost port from a given list of ports (e.g. for Tor port checks)
+    """
+
+    retVal = None
+
+    for port in ports:
+        try:
+            try:
+                s = socket._orig_socket(socket.AF_INET, socket.SOCK_STREAM)
+            except AttributeError:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.connect((LOCALHOST, port))
+            retVal = port
+            break
+        except socket.error:
+            pass
+        finally:
+            try:
+                s.close()
+            except socket.error:
+                pass
+
+    return retVal
+
 def findMultipartPostBoundary(post):
     """
     Finds value for a boundary parameter in given multipart POST body
@@ -2558,6 +2592,7 @@ def logHTTPTraffic(requestLogMsg, responseLogMsg):
 def getPageTemplate(payload, place):  # Cross-linked function
     raise NotImplementedError
 
+@cachedmethod
 def getPublicTypeMembers(type_, onlyValues=False):
     """
     Useful for getting members from types (e.g. in enums)
@@ -2566,12 +2601,16 @@ def getPublicTypeMembers(type_, onlyValues=False):
     ['Linux', 'Windows']
     """
 
+    retVal = []
+
     for name, value in inspect.getmembers(type_):
         if not name.startswith('__'):
             if not onlyValues:
-                yield (name, value)
+                retVal.append((name, value))
             else:
-                yield value
+                retVal.append(value)
+
+    return retVal
 
 def enumValueToNameLookup(type_, value_):
     """
@@ -3079,6 +3118,24 @@ def decodeIntToUnicode(value):
 
     return retVal
 
+def checkIntegrity():
+    """
+    Checks integrity of code files during the unhandled exceptions
+    """
+
+    logger.debug("running code integrity check")
+
+    retVal = True
+    for checksum, _ in (re.split(r'\s+', _) for _ in getFileItems(paths.CHECKSUM_MD5)):
+        path = os.path.normpath(os.path.join(paths.SQLMAP_ROOT_PATH, _))
+        if not os.path.isfile(path):
+            logger.error("missing file detected '%s'" % path)
+            retVal = False
+        elif hashlib.md5(open(path, 'rb').read()).hexdigest() != checksum:
+            logger.error("wrong checksum of file '%s' detected" % path)
+            retVal = False
+    return retVal
+
 def unhandledExceptionMessage():
     """
     Returns detailed message about occurred unhandled exception
@@ -3135,13 +3192,28 @@ def createGithubIssue(errMsg, excMsg):
         ex = None
         errMsg = errMsg[errMsg.find("\n"):]
 
+        req = urllib2.Request(url="https://api.github.com/search/issues?q=%s" % urllib.quote("repo:sqlmapproject/sqlmap Unhandled exception (#%s)" % key))
+
+        try:
+            content = urllib2.urlopen(req).read()
+            _ = json.loads(content)
+            duplicate = _["total_count"] > 0
+            closed = duplicate and _["items"][0]["state"] == "closed"
+            if duplicate:
+                warnMsg = "issue seems to be already reported"
+                if closed:
+                    warnMsg += " and resolved. Please update to the latest "
+                    warnMsg += "development version from official GitHub repository at '%s'" % GIT_PAGE
+                logger.warn(warnMsg)
+                return
+        except:
+            pass
 
         data = {"title": "Unhandled exception (#%s)" % key, "body": "```%s\n```\n```\n%s```" % (errMsg, excMsg)}
         req = urllib2.Request(url="https://api.github.com/repos/sqlmapproject/sqlmap/issues", data=json.dumps(data), headers={"Authorization": "token %s" % GITHUB_REPORT_OAUTH_TOKEN.decode("base64")})
 
         try:
-            f = urllib2.urlopen(req)
-            content = f.read()
+            content = urllib2.urlopen(req).read()
         except Exception, ex:
             content = None
 
@@ -3170,7 +3242,7 @@ def maskSensitiveData(msg):
 
     retVal = getUnicode(msg)
 
-    for item in filter(None, map(lambda x: conf.get(x), ("hostname", "data", "googleDork", "authCred", "proxyCred", "tbl", "db", "col", "user", "cookie", "proxy", "rFile", "wFile", "dFile"))):
+    for item in filter(None, map(lambda x: conf.get(x), ("hostname", "data", "dnsDomain", "googleDork", "authCred", "proxyCred", "tbl", "db", "col", "user", "cookie", "proxy", "rFile", "wFile", "dFile"))):
         regex = SENSITIVE_DATA_REGEX % re.sub("(\W)", r"\\\1", getUnicode(item))
         while extractRegexResult(regex, retVal):
             value = extractRegexResult(regex, retVal)
@@ -3562,6 +3634,7 @@ def randomizeParameterValue(value):
 
     return retVal
 
+@cachedmethod
 def asciifyUrl(url, forceQuote=False):
     """
     Attempts to make a unicode URL usuable with ``urllib/urllib2``.
@@ -4056,8 +4129,11 @@ def getRequestHeader(request, name):
     """
 
     retVal = None
+
     if request and name:
-        retVal = max(value if name.upper() == key.upper() else None for key, value in request.header_items())
+        _ = name.upper()
+        retVal = max([value if _ == key.upper() else None for key, value in request.header_items()])
+
     return retVal
 
 def isNumber(value):

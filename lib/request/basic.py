@@ -26,6 +26,7 @@ from lib.core.common import singleTimeWarnMessage
 from lib.core.data import conf
 from lib.core.data import kb
 from lib.core.data import logger
+from lib.core.decorators import cachedmethod
 from lib.core.enums import DBMS
 from lib.core.enums import HTTP_HEADER
 from lib.core.enums import PLACE
@@ -136,6 +137,7 @@ def parseResponse(page, headers):
     if page:
         htmlParser(page)
 
+@cachedmethod
 def checkCharEncoding(encoding, warn=True):
     """
     Checks encoding name, repairs common misspellings and adjusts to
@@ -230,7 +232,10 @@ def getHeuristicCharEncoding(page):
     Returns page encoding charset detected by usage of heuristics
     Reference: http://chardet.feedparser.org/docs/
     """
-    retVal = detect(page)["encoding"]
+
+    key = hash(page)
+    retVal = kb.cache.encoding.get(key) or detect(page)["encoding"]
+    kb.cache.encoding[key] = retVal
 
     if retVal:
         infoMsg = "heuristics detected web page charset '%s'" % retVal
@@ -336,6 +341,8 @@ def processResponse(page, responseHeaders):
 
     if not kb.tableFrom and Backend.getIdentifiedDbms() in (DBMS.ACCESS,):
         kb.tableFrom = extractRegexResult(SELECT_FROM_TABLE_REGEX, page)
+    else:
+        kb.tableFrom = None
 
     if conf.parseErrors:
         msg = extractErrorMessage(page)
@@ -351,7 +358,11 @@ def processResponse(page, responseHeaders):
                 if PLACE.POST in conf.paramDict and name in conf.paramDict[PLACE.POST]:
                     if conf.paramDict[PLACE.POST][name] in page:
                         continue
-                    conf.paramDict[PLACE.POST][name] = value
+                    else:
+                        msg = "do you want to automatically adjust the value of '%s'? [y/N]" % name
+                        if readInput(msg, default='N').strip().upper() != 'Y':
+                            continue
+                        conf.paramDict[PLACE.POST][name] = value
                 conf.parameters[PLACE.POST] = re.sub("(?i)(%s=)[^&]+" % name, r"\g<1>%s" % value, conf.parameters[PLACE.POST])
 
     if not kb.captchaDetected and re.search(r"(?i)captcha", page or ""):
@@ -359,6 +370,8 @@ def processResponse(page, responseHeaders):
             if re.search(r"(?i)captcha", match.group(0)):
                 kb.captchaDetected = True
                 warnMsg = "potential CAPTCHA protection mechanism detected"
+                if re.search(r"(?i)<title>[^<]*CloudFlare", page):
+                    warnMsg += " (CloudFlare)"
                 singleTimeWarnMessage(warnMsg)
                 break
 
