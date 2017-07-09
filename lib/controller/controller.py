@@ -1,12 +1,13 @@
 #!/usr/bin/env python
 
 """
-Copyright (c) 2006-2016 sqlmap developers (http://sqlmap.org/)
+Copyright (c) 2006-2017 sqlmap developers (http://sqlmap.org/)
 See the file 'doc/COPYING' for copying permission
 """
 
 import os
 import re
+import time
 
 from lib.controller.action import action
 from lib.controller.checks import checkSqlInjection
@@ -15,6 +16,7 @@ from lib.controller.checks import checkStability
 from lib.controller.checks import checkString
 from lib.controller.checks import checkRegexp
 from lib.controller.checks import checkConnection
+from lib.controller.checks import checkInternet
 from lib.controller.checks import checkNullConnection
 from lib.controller.checks import checkWaf
 from lib.controller.checks import heuristicCheckSqlInjection
@@ -65,7 +67,6 @@ from lib.core.settings import REFERER_ALIASES
 from lib.core.settings import USER_AGENT_ALIASES
 from lib.core.target import initTargetEnv
 from lib.core.target import setupTargetEnv
-from thirdparty.pagerank.pagerank import get_pagerank
 
 def _selectInjection():
     """
@@ -117,11 +118,11 @@ def _selectInjection():
                 message += "\n"
 
         message += "[q] Quit"
-        select = readInput(message, default="0")
+        choice = readInput(message, default='0').upper()
 
-        if select.isdigit() and int(select) < len(kb.injections) and int(select) >= 0:
-            index = int(select)
-        elif select[0] in ("Q", "q"):
+        if choice.isdigit() and int(choice) < len(kb.injections) and int(choice) >= 0:
+            index = int(choice)
+        elif choice == 'Q':
             raise SqlmapUserQuitException
         else:
             errMsg = "invalid choice"
@@ -141,7 +142,7 @@ def _formatInjection(inj):
         if inj.place == PLACE.CUSTOM_HEADER:
             payload = payload.split(',', 1)[1]
         if stype == PAYLOAD.TECHNIQUE.UNION:
-            count = re.sub(r"(?i)(\(.+\))|(\blimit[^A-Za-z]+)", "", sdata.payload).count(',') + 1
+            count = re.sub(r"(?i)(\(.+\))|(\blimit[^a-z]+)", "", sdata.payload).count(',') + 1
             title = re.sub(r"\d+ to \d+", str(count), title)
             vector = agent.forgeUnionQuery("[QUERY]", vector[0], vector[1], vector[2], None, None, vector[5], vector[6])
             if count == 1:
@@ -162,10 +163,11 @@ def _showInjections():
     else:
         header = "sqlmap resumed the following injection point(s) from stored session"
 
-    if hasattr(conf, "api"):
+    if conf.api:
+        conf.dumper.string("", {"url": conf.url, "query": conf.parameters.get(PLACE.GET), "data": conf.parameters.get(PLACE.POST)}, content_type=CONTENT_TYPE.TARGET)
         conf.dumper.string("", kb.injections, content_type=CONTENT_TYPE.TECHNIQUES)
     else:
-        data = "".join(set(map(lambda x: _formatInjection(x), kb.injections))).rstrip("\n")
+        data = "".join(set(_formatInjection(_) for _ in kb.injections)).rstrip("\n")
         conf.dumper.string(header, data)
 
     if conf.tamper:
@@ -183,8 +185,8 @@ def _randomFillBlankFields(value):
 
     if extractRegexResult(EMPTY_FORM_FIELDS_REGEX, value):
         message = "do you want to fill blank fields with random values? [Y/n] "
-        test = readInput(message, default="Y")
-        if not test or test[0] in ("y", "Y"):
+
+        if readInput(message, default='Y', boolean=True):
             for match in re.finditer(EMPTY_FORM_FIELDS_REGEX, retVal):
                 item = match.group("result")
                 if not any(_ in item for _ in IGNORE_PARAMETERS) and not re.search(ASP_NET_CONTROL_REGEX, item):
@@ -224,7 +226,7 @@ def _saveToResultsFile():
         return
 
     results = {}
-    techniques = dict(map(lambda x: (x[1], x[0]), getPublicTypeMembers(PAYLOAD.TECHNIQUE)))
+    techniques = dict((_[1], _[0]) for _ in getPublicTypeMembers(PAYLOAD.TECHNIQUE))
 
     for injection in kb.injections + kb.falsePositives:
         if injection.place is None or injection.parameter is None:
@@ -238,7 +240,7 @@ def _saveToResultsFile():
 
     for key, value in results.items():
         place, parameter, notes = key
-        line = "%s,%s,%s,%s,%s%s" % (safeCSValue(kb.originalUrls.get(conf.url) or conf.url), place, parameter, "".join(map(lambda x: techniques[x][0].upper(), sorted(value))), notes, os.linesep)
+        line = "%s,%s,%s,%s,%s%s" % (safeCSValue(kb.originalUrls.get(conf.url) or conf.url), place, parameter, "".join(techniques[_][0].upper() for _ in sorted(value)), notes, os.linesep)
         conf.resultsFP.writelines(line)
 
     if not results:
@@ -276,6 +278,21 @@ def start():
 
     for targetUrl, targetMethod, targetData, targetCookie, targetHeaders in kb.targets:
         try:
+
+            if conf.checkInternet:
+                infoMsg = "[INFO] checking for Internet connection"
+                logger.info(infoMsg)
+
+                if not checkInternet():
+                    warnMsg = "[%s] [WARNING] no connection detected" % time.strftime("%X")
+                    dataToStdout(warnMsg)
+
+                    while not checkInternet():
+                        dataToStdout('.')
+                        time.sleep(5)
+
+                    dataToStdout("\n")
+
             conf.url = targetUrl
             conf.method = targetMethod.upper() if targetMethod else targetMethod
             conf.data = targetData
@@ -305,7 +322,9 @@ def start():
                     message = "SQL injection vulnerability has already been detected "
                     message += "against '%s'. Do you want to skip " % conf.hostname
                     message += "further tests involving it? [Y/n]"
-                    kb.skipVulnHost = readInput(message, default="Y").upper() != 'N'
+
+                    kb.skipVulnHost = readInput(message, default='Y', boolean=True)
+
                 testSqlInj = not kb.skipVulnHost
 
             if not testSqlInj:
@@ -319,7 +338,7 @@ def start():
                 if conf.forms and conf.method:
                     message = "[#%d] form:\n%s %s" % (hostCount, conf.method, targetUrl)
                 else:
-                    message = "URL %d:\n%s %s%s" % (hostCount, HTTPMETHOD.GET, targetUrl, " (PageRank: %s)" % get_pagerank(targetUrl) if conf.googleDork and conf.pageRank else "")
+                    message = "URL %d:\n%s %s" % (hostCount, HTTPMETHOD.GET, targetUrl)
 
                 if conf.cookie:
                     message += "\nCookie: %s" % conf.cookie
@@ -332,9 +351,13 @@ def start():
                         continue
 
                     message += "\ndo you want to test this form? [Y/n/q] "
-                    test = readInput(message, default="Y")
+                    choice = readInput(message, default='Y').upper()
 
-                    if not test or test[0] in ("y", "Y"):
+                    if choice == 'N':
+                        continue
+                    elif choice == 'Q':
+                        break
+                    else:
                         if conf.method != HTTPMETHOD.GET:
                             message = "Edit %s data [default: %s]%s: " % (conf.method, urlencode(conf.data) if conf.data else "None", " (Warning: blank fields detected)" if conf.data and extractRegexResult(EMPTY_FORM_FIELDS_REGEX, conf.data) else "")
                             conf.data = readInput(message, default=conf.data)
@@ -352,21 +375,14 @@ def start():
 
                         parseTargetUrl()
 
-                    elif test[0] in ("n", "N"):
-                        continue
-                    elif test[0] in ("q", "Q"):
-                        break
-
                 else:
                     message += "\ndo you want to test this URL? [Y/n/q]"
-                    test = readInput(message, default="Y")
+                    choice = readInput(message, default='Y').upper()
 
-                    if not test or test[0] in ("y", "Y"):
-                        pass
-                    elif test[0] in ("n", "N"):
+                    if choice == 'N':
                         dataToStdout(os.linesep)
                         continue
-                    elif test[0] in ("q", "Q"):
+                    elif choice == 'Q':
                         break
 
                     infoMsg = "testing URL '%s'" % targetUrl
@@ -470,6 +486,12 @@ def start():
                             infoMsg = "skipping %s parameter '%s'" % (paramType, parameter)
                             logger.info(infoMsg)
 
+                        elif conf.paramExclude and (re.search(conf.paramExclude, parameter, re.I) or kb.postHint and re.search(conf.paramExclude, parameter.split(' ')[-1], re.I)):
+                            testSqlInj = False
+
+                            infoMsg = "skipping %s parameter '%s'" % (paramType, parameter)
+                            logger.info(infoMsg)
+
                         elif parameter == conf.csrfToken:
                             testSqlInj = False
 
@@ -537,9 +559,8 @@ def start():
 
                                         msg = "%s parameter '%s' " % (injection.place, injection.parameter)
                                         msg += "is vulnerable. Do you want to keep testing the others (if any)? [y/N] "
-                                        test = readInput(msg, default="N")
 
-                                        if test[0] not in ("y", "Y"):
+                                        if not readInput(msg, default='N', boolean=True):
                                             proceed = False
                                             paramKey = (conf.hostname, conf.path, None, None)
                                             kb.testedParams.add(paramKey)
@@ -623,9 +644,7 @@ def start():
             if kb.injection.place is not None and kb.injection.parameter is not None:
                 if conf.multipleTargets:
                     message = "do you want to exploit this SQL injection? [Y/n] "
-                    exploit = readInput(message, default="Y")
-
-                    condition = not exploit or exploit[0] in ("y", "Y")
+                    condition = readInput(message, default='Y', boolean=True)
                 else:
                     condition = True
 
@@ -638,13 +657,11 @@ def start():
                 logger.warn(warnMsg)
 
                 message = "do you want to skip to the next target in list? [Y/n/q]"
-                test = readInput(message, default="Y")
+                choice = readInput(message, default='Y').upper()
 
-                if not test or test[0] in ("y", "Y"):
-                    pass
-                elif test[0] in ("n", "N"):
+                if choice == 'N':
                     return False
-                elif test[0] in ("q", "Q"):
+                elif choice == 'Q':
                     raise SqlmapUserQuitException
             else:
                 raise

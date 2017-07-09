@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 """
-Copyright (c) 2006-2016 sqlmap developers (http://sqlmap.org/)
+Copyright (c) 2006-2017 sqlmap developers (http://sqlmap.org/)
 See the file 'doc/COPYING' for copying permission
 """
 
@@ -143,6 +143,9 @@ def _comparison(page, headers, code, getRatioValue, pageLength):
         if ratio >= LOWER_RATIO_BOUND and ratio <= UPPER_RATIO_BOUND:
             kb.matchRatio = ratio
             logger.debug("setting match ratio for current parameter to %.3f" % kb.matchRatio)
+
+    if kb.testMode:
+        threadData.lastComparisonRatio = ratio
 
     # If it has been requested to return the ratio and not a comparison
     # response

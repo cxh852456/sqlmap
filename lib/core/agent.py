@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 """
-Copyright (c) 2006-2016 sqlmap developers (http://sqlmap.org/)
+Copyright (c) 2006-2017 sqlmap developers (http://sqlmap.org/)
 See the file 'doc/COPYING' for copying permission
 """
 
@@ -63,7 +63,7 @@ class Agent(object):
 
         if Backend.getIdentifiedDbms() in (DBMS.ORACLE,):  # non-standard object(s) make problems to a database connector while returned (e.g. XMLTYPE)
             _, _, _, _, _, _, fieldsToCastStr, _ = self.getFields(query)
-            for field in fieldsToCastStr.split(","):
+            for field in fieldsToCastStr.split(','):
                 query = query.replace(field, self.nullAndCastField(field))
 
         if kb.tamperFunctions:
@@ -296,7 +296,7 @@ class Agent(object):
         elif suffix and not comment:
             expression += suffix.replace('\\', BOUNDARY_BACKSLASH_MARKER)
 
-        return re.sub(r"(?s);\W*;", ";", expression)
+        return re.sub(r";\W*;", ";", expression)
 
     def cleanupPayload(self, payload, origValue=None):
         if payload is None:
@@ -316,6 +316,7 @@ class Agent(object):
             payload = payload.replace(_, randomStr())
 
         if origValue is not None and "[ORIGVALUE]" in payload:
+            origValue = getUnicode(origValue)
             payload = getUnicode(payload).replace("[ORIGVALUE]", origValue if origValue.isdigit() else unescaper.escape("'%s'" % origValue))
 
         if "[INFERENCE]" in payload:
@@ -345,6 +346,12 @@ class Agent(object):
 
         if payload:
             payload = payload.replace(SLEEP_TIME_MARKER, str(conf.timeSec))
+
+            for _ in set(re.findall(r"\[RANDNUM(?:\d+)?\]", payload, re.I)):
+                payload = payload.replace(_, str(randomInt()))
+
+            for _ in set(re.findall(r"\[RANDSTR(?:\d+)?\]", payload, re.I)):
+                payload = payload.replace(_, randomStr())
 
         return payload
 
@@ -452,7 +459,7 @@ class Agent(object):
         @rtype: C{str}
         """
 
-        if not Backend.getDbms():
+        if not Backend.getIdentifiedDbms():
             return fields
 
         if fields.startswith("(CASE") or fields.startswith("(IIF") or fields.startswith("SUBSTR") or fields.startswith("MID(") or re.search(r"\A'[^']+'\Z", fields):
@@ -528,6 +535,8 @@ class Agent(object):
             fieldsToCastStr = re.sub(r"\ASELECT%s\s+" % prefixRegex, "", fieldsToCastStr)
         elif fieldsSelect:
             fieldsToCastStr = fieldsSelect.group(1)
+
+        fieldsToCastStr = fieldsToCastStr or ""
 
         # Function
         if re.search("\A\w+\(.*\)", fieldsToCastStr, re.I) or (fieldsSelectCase and "WHEN use" not in query) or fieldsSubstr:
@@ -855,7 +864,7 @@ class Agent(object):
                     if expression.find(queries[Backend.getIdentifiedDbms()].limitstring.query) > 0:
                         _ = expression.index(queries[Backend.getIdentifiedDbms()].limitstring.query)
                     else:
-                        _ = expression.index("LIMIT ")
+                        _ = re.search(r"\bLIMIT\b", expression, re.I).start()
                     expression = expression[:_]
 
                 elif Backend.getIdentifiedDbms() in (DBMS.MSSQL, DBMS.SYBASE):
@@ -1074,6 +1083,21 @@ class Agent(object):
     def runAsDBMSUser(self, query):
         if conf.dbmsCred and "Ad Hoc Distributed Queries" not in query:
             query = getSQLSnippet(DBMS.MSSQL, "run_statement_as_user", USER=conf.dbmsUsername, PASSWORD=conf.dbmsPassword, STATEMENT=query.replace("'", "''"))
+
+        return query
+
+    def whereQuery(self, query):
+        if conf.dumpWhere and query:
+            prefix, suffix = query.split(" ORDER BY ") if " ORDER BY " in query else (query, "")
+
+            if "%s)" % conf.tbl.upper() in prefix.upper():
+                prefix = re.sub(r"(?i)%s\)" % re.escape(conf.tbl), "%s WHERE %s)" % (conf.tbl, conf.dumpWhere), prefix)
+            elif re.search(r"(?i)\bWHERE\b", prefix):
+                prefix += " AND %s" % conf.dumpWhere
+            else:
+                prefix += " WHERE %s" % conf.dumpWhere
+
+            query = "%s ORDER BY %s" % (prefix, suffix) if suffix else prefix
 
         return query
 

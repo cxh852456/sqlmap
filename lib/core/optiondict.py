@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 """
-Copyright (c) 2006-2016 sqlmap developers (http://sqlmap.org/)
+Copyright (c) 2006-2017 sqlmap developers (http://sqlmap.org/)
 See the file 'doc/COPYING' for copying permission
 """
 
@@ -40,6 +40,7 @@ optDict = {
                                "authFile":          "string",
                                "ignore401":         "boolean",
                                "ignoreProxy":       "boolean",
+                               "ignoreRedirects":   "boolean",
                                "ignoreTimeouts":    "boolean",
                                "proxy":             "string",
                                "proxyCred":         "string",
@@ -76,6 +77,7 @@ optDict = {
                                "testParameter":     "string",
                                "skip":              "string",
                                "skipStatic":        "boolean",
+                               "paramExclude":      "string",
                                "dbms":              "string",
                                "dbmsCred":          "string",
                                "os":                "string",
@@ -194,6 +196,7 @@ optDict = {
                                "batch":             "boolean",
                                "binaryFields":      "string",
                                "charset":           "string",
+                               "checkInternet":     "boolean",
                                "crawlDepth":        "integer",
                                "crawlExclude":      "string",
                                "csvDel":            "string",
@@ -202,6 +205,7 @@ optDict = {
                                "flushSession":      "boolean",
                                "forms":             "boolean",
                                "freshQueries":      "boolean",
+                               "harFile":           "string",
                                "hexConvert":        "boolean",
                                "outputDir":         "string",
                                "parseErrors":       "boolean",
@@ -223,11 +227,11 @@ optDict = {
                                "identifyWaf":       "boolean",
                                "mobile":            "boolean",
                                "offline":           "boolean",
-                               "pageRank":          "boolean",
                                "purgeOutput":       "boolean",
                                "skipWaf":           "boolean",
                                "smart":             "boolean",
                                "tmpDir":            "string",
+                               "webRoot":           "string",
                                "wizard":            "boolean",
                                "verbose":           "integer",
                              },
@@ -241,5 +245,10 @@ optDict = {
                                "liveTest":          "boolean",
                                "stopFail":          "boolean",
                                "runCase":           "string",
+                      },
+            "API": {
+                               "api":               "boolean",
+                               "taskid":            "string",
+                               "database":          "string",
                       }
           }

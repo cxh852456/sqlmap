@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 """
-Copyright (c) 2006-2016 sqlmap developers (http://sqlmap.org/)
+Copyright (c) 2006-2017 sqlmap developers (http://sqlmap.org/)
 See the file 'doc/COPYING' for copying permission
 """
 
@@ -63,6 +63,7 @@ def direct(query, content=True):
     elif output:
         infoMsg = "resumed: %s..." % getUnicode(output, UNICODE_ENCODING)[:20]
         logger.info(infoMsg)
+
     threadData.lastQueryDuration = calculateDeltaSeconds(start)
 
     if not output:

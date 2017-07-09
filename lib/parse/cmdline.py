@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 """
-Copyright (c) 2006-2016 sqlmap developers (http://sqlmap.org/)
+Copyright (c) 2006-2017 sqlmap developers (http://sqlmap.org/)
 See the file 'doc/COPYING' for copying permission
 """
 
@@ -31,7 +31,6 @@ from lib.core.settings import BASIC_HELP_ITEMS
 from lib.core.settings import DUMMY_URL
 from lib.core.settings import IS_WIN
 from lib.core.settings import MAX_HELP_OPTION_LENGTH
-from lib.core.settings import UNICODE_ENCODING
 from lib.core.settings import VERSION_STRING
 from lib.core.shell import autoCompletion
 from lib.core.shell import clearHistory
@@ -48,7 +47,8 @@ def cmdLineParser(argv=None):
 
     checkSystemEncoding()
 
-    _ = getUnicode(os.path.basename(argv[0]), encoding=sys.getfilesystemencoding() or UNICODE_ENCODING)
+    # Reference: https://stackoverflow.com/a/4012683 (Note: previously used "...sys.getfilesystemencoding() or UNICODE_ENCODING")
+    _ = getUnicode(os.path.basename(argv[0]), encoding=sys.stdin.encoding)
 
     usage = "%s%s [options]" % ("python " if not IS_WIN else "", \
             "\"%s\"" % _ if " " in _ else _)
@@ -154,6 +154,9 @@ def cmdLineParser(argv=None):
 
         request.add_option("--ignore-proxy", dest="ignoreProxy", action="store_true",
                            help="Ignore system default proxy settings")
+
+        request.add_option("--ignore-redirects", dest="ignoreRedirects", action="store_true",
+                          help="Ignore redirection attempts")
 
         request.add_option("--ignore-timeouts", dest="ignoreTimeouts", action="store_true",
                           help="Ignore connection timeouts")
@@ -265,6 +268,9 @@ def cmdLineParser(argv=None):
 
         injection.add_option("--skip-static", dest="skipStatic", action="store_true",
                              help="Skip testing parameters that not appear to be dynamic")
+
+        injection.add_option("--param-exclude", dest="paramExclude",
+                           help="Regexp to exclude parameters from testing (e.g. \"ses\")")
 
         injection.add_option("--dbms", dest="dbms",
                              help="Force back-end DBMS to this value")
@@ -476,10 +482,10 @@ def cmdLineParser(argv=None):
                                help="Use WHERE condition while table dumping")
 
         enumeration.add_option("--start", dest="limitStart", type="int",
-                               help="First query output entry to retrieve")
+                               help="First dump table entry to retrieve")
 
         enumeration.add_option("--stop", dest="limitStop", type="int",
-                               help="Last query output entry to retrieve")
+                               help="Last dump table entry to retrieve")
 
         enumeration.add_option("--first", dest="firstChar", type="int",
                                help="First query output word character to retrieve")
@@ -611,9 +617,6 @@ def cmdLineParser(argv=None):
         general = OptionGroup(parser, "General", "These options can be used "
                              "to set some general working parameters")
 
-        #general.add_option("-x", dest="xmlFile",
-        #                    help="Dump the data into an XML file")
-
         general.add_option("-s", dest="sessionFile",
                             help="Load session from a stored (.sqlite) file")
 
@@ -631,6 +634,10 @@ def cmdLineParser(argv=None):
         general.add_option("--charset", dest="charset",
                             help="Force character encoding used for data retrieval")
 
+        general.add_option("--check-internet", dest="checkInternet",
+                            action="store_true",
+                            help="Check Internet connection before assessing the target")
+
         general.add_option("--crawl", dest="crawlDepth", type="int",
                             help="Crawl the website starting from the target URL")
 
@@ -646,8 +653,7 @@ def cmdLineParser(argv=None):
 
         general.add_option("--eta", dest="eta",
                             action="store_true",
-                            help="Display for each output the "
-                                 "estimated time of arrival")
+                            help="Display for each output the estimated time of arrival")
 
         general.add_option("--flush-session", dest="flushSession",
                             action="store_true",
@@ -660,6 +666,9 @@ def cmdLineParser(argv=None):
         general.add_option("--fresh-queries", dest="freshQueries",
                             action="store_true",
                             help="Ignore query results stored in session file")
+
+        general.add_option("--har", dest="harFile",
+                           help="Log all HTTP traffic into a HAR file")
 
         general.add_option("--hex", dest="hexConvert",
                             action="store_true",
@@ -732,10 +741,6 @@ def cmdLineParser(argv=None):
                                   action="store_true",
                                   help="Work in offline mode (only use session data)")
 
-        miscellaneous.add_option("--page-rank", dest="pageRank",
-                                  action="store_true",
-                                  help="Display page rank (PR) for Google dork results")
-
         miscellaneous.add_option("--purge-output", dest="purgeOutput",
                                   action="store_true",
                                   help="Safely remove all content from output directory")
@@ -754,6 +759,9 @@ def cmdLineParser(argv=None):
         miscellaneous.add_option("--tmp-dir", dest="tmpDir",
                                   help="Local directory for storing temporary files")
 
+        miscellaneous.add_option("--web-root", dest="webRoot",
+                                  help="Web server document root directory (e.g. \"/var/www\")")
+
         miscellaneous.add_option("--wizard", dest="wizard",
                                   action="store_true",
                                   help="Simple wizard interface for beginner users")
@@ -765,10 +773,10 @@ def cmdLineParser(argv=None):
         parser.add_option("--murphy-rate", dest="murphyRate", type="int",
                           help=SUPPRESS_HELP)
 
-        parser.add_option("--pickled-options", dest="pickledOptions",
+        parser.add_option("--disable-precon", dest="disablePrecon", action="store_true",
                           help=SUPPRESS_HELP)
 
-        parser.add_option("--disable-precon", dest="disablePrecon", action="store_true",
+        parser.add_option("--disable-stats", dest="disableStats", action="store_true",
                           help=SUPPRESS_HELP)
 
         parser.add_option("--profile", dest="profile", action="store_true",
@@ -790,6 +798,14 @@ def cmdLineParser(argv=None):
                           help=SUPPRESS_HELP)
 
         parser.add_option("--run-case", dest="runCase", help=SUPPRESS_HELP)
+
+        # API options
+        parser.add_option("--api", dest="api", action="store_true",
+                          help=SUPPRESS_HELP)
+
+        parser.add_option("--taskid", dest="taskid", help=SUPPRESS_HELP)
+
+        parser.add_option("--database", dest="database", help=SUPPRESS_HELP)
 
         parser.add_option_group(target)
         parser.add_option_group(request)
@@ -831,8 +847,9 @@ def cmdLineParser(argv=None):
         advancedHelp = True
         extraHeaders = []
 
+        # Reference: https://stackoverflow.com/a/4012683 (Note: previously used "...sys.getfilesystemencoding() or UNICODE_ENCODING")
         for arg in argv:
-            _.append(getUnicode(arg, encoding=sys.getfilesystemencoding() or UNICODE_ENCODING))
+            _.append(getUnicode(arg, encoding=sys.stdin.encoding))
 
         argv = _
         checkDeprecatedOptions(argv)
@@ -891,8 +908,11 @@ def cmdLineParser(argv=None):
         for i in xrange(len(argv)):
             if argv[i] == "-hh":
                 argv[i] = "-h"
-            elif len(argv[i]) > 1 and all(ord(_) in xrange(0x2018, 0x2020) for _ in (argv[i][0], argv[i][-1])):
+            elif len(argv[i]) > 1 and all(ord(_) in xrange(0x2018, 0x2020) for _ in ((argv[i].split('=', 1)[-1].strip() or ' ')[0], argv[i][-1])):
                 dataToStdout("[!] copy-pasting illegal (non-console) quote characters from Internet is, well, illegal (%s)\n" % argv[i])
+                raise SystemExit
+            elif len(argv[i]) > 1 and u"\uff0c" in argv[i].split('=', 1)[-1]:
+                dataToStdout("[!] copy-pasting illegal (non-console) comma characters from Internet is, well, illegal (%s)\n" % argv[i])
                 raise SystemExit
             elif re.search(r"\A-\w=.+", argv[i]):
                 dataToStdout("[!] potentially miswritten (illegal '=') short option detected ('%s')\n" % argv[i])
@@ -952,7 +972,7 @@ def cmdLineParser(argv=None):
 
         if not any((args.direct, args.url, args.logFile, args.bulkFile, args.googleDork, args.configFile, \
             args.requestFile, args.updateAll, args.smokeTest, args.liveTest, args.wizard, args.dependencies, \
-            args.purgeOutput, args.pickledOptions, args.sitemapUrl)):
+            args.purgeOutput, args.sitemapUrl)):
             errMsg = "missing a mandatory option (-d, -u, -l, -m, -r, -g, -c, -x, --wizard, --update, --purge-output or --dependencies), "
             errMsg += "use -h for basic or -hh for advanced help\n"
             parser.error(errMsg)

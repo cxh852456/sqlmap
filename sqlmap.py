@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 """
-Copyright (c) 2006-2016 sqlmap developers (http://sqlmap.org/)
+Copyright (c) 2006-2017 sqlmap developers (http://sqlmap.org/)
 See the file 'doc/COPYING' for copying permission
 """
 
@@ -9,12 +9,16 @@ import sys
 
 sys.dont_write_bytecode = True
 
-from lib.utils import versioncheck  # this has to be the first non-standard import
+try:
+    __import__("lib.utils.versioncheck")  # this has to be the first non-standard import
+except ImportError:
+    exit("[!] wrong installation detected (missing modules). Visit 'https://github.com/sqlmapproject/sqlmap/#installation' for further details")
 
 import bdb
 import distutils
 import glob
 import inspect
+import json
 import logging
 import os
 import re
@@ -40,6 +44,7 @@ try:
     from lib.core.common import getSafeExString
     from lib.core.common import getUnicode
     from lib.core.common import maskSensitiveData
+    from lib.core.common import openFile
     from lib.core.common import setPaths
     from lib.core.common import weAreFrozen
     from lib.core.data import cmdLineOptions
@@ -115,7 +120,6 @@ def main():
 
     try:
         checkEnvironment()
-
         setPaths(modulePath())
         banner()
 
@@ -123,7 +127,7 @@ def main():
         cmdLineOptions.update(cmdLineParser().__dict__)
         initOptions(cmdLineOptions)
 
-        if hasattr(conf, "api"):
+        if conf.get("api"):
             # heavy imports
             from lib.utils.api import StdDbOut
             from lib.utils.api import setRestAPILog
@@ -203,12 +207,19 @@ def main():
         print
         errMsg = unhandledExceptionMessage()
         excMsg = traceback.format_exc()
+        valid = checkIntegrity()
 
         try:
-            if not checkIntegrity():
+            if valid is False:
                 errMsg = "code integrity check failed (turning off automatic issue creation). "
                 errMsg += "You should retrieve the latest development version from official GitHub "
                 errMsg += "repository at '%s'" % GIT_PAGE
+                logger.critical(errMsg)
+                print
+                dataToStdout(excMsg)
+                raise SystemExit
+
+            elif "tamper/" in excMsg:
                 logger.critical(errMsg)
                 print
                 dataToStdout(excMsg)
@@ -254,6 +265,13 @@ def main():
                 logger.error(errMsg)
                 raise SystemExit
 
+            elif "'DictObject' object has no attribute '" in excMsg and all(_ in errMsg for _ in ("(fingerprinted)", "(identified)")):
+                errMsg = "there has been a problem in enumeration. "
+                errMsg += "Because of a considerable chance of false-positive case "
+                errMsg += "you are advised to rerun with switch '--flush-session'"
+                logger.error(errMsg)
+                raise SystemExit
+
             elif all(_ in excMsg for _ in ("pymysql", "configparser")):
                 errMsg = "wrong initialization of pymsql detected (using Python3 dependencies)"
                 logger.error(errMsg)
@@ -279,7 +297,7 @@ def main():
             errMsg = maskSensitiveData(errMsg)
             excMsg = maskSensitiveData(excMsg)
 
-            if hasattr(conf, "api"):
+            if conf.get("api") or not valid:
                 logger.critical("%s\n%s" % (errMsg, excMsg))
             else:
                 logger.critical(errMsg)
@@ -314,13 +332,17 @@ def main():
             except KeyboardInterrupt:
                 pass
 
+        if conf.get("harFile"):
+            with openFile(conf.harFile, "w+b") as f:
+                json.dump(conf.httpCollector.obtain(), fp=f, indent=4, separators=(',', ': '))
+
         if cmdLineOptions.get("sqlmapShell"):
             cmdLineOptions.clear()
             conf.clear()
             kb.clear()
             main()
 
-        if hasattr(conf, "api"):
+        if conf.get("api"):
             try:
                 conf.databaseCursor.disconnect()
             except KeyboardInterrupt:

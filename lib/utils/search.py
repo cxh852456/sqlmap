@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 """
-Copyright (c) 2006-2016 sqlmap developers (http://sqlmap.org/)
+Copyright (c) 2006-2017 sqlmap developers (http://sqlmap.org/)
 See the file 'doc/COPYING' for copying permission
 """
 
@@ -111,11 +111,11 @@ def _search(dork):
         message += "\n[1] (re)try with DuckDuckGo (default)"
         message += "\n[2] (re)try with Disconnect Search"
         message += "\n[3] quit"
-        choice = readInput(message, default="1").strip().upper()
+        choice = readInput(message, default='1')
 
-        if choice == "Q":
+        if choice == '3':
             raise SqlmapUserQuitException
-        elif choice == "2":
+        elif choice == '2':
             url = "https://search.disconnect.me/searchTerms/search?"
             url += "start=nav&option=Web"
             url += "&query=%s" % urlencode(dork, convall=True)
