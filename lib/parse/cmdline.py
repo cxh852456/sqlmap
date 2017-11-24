@@ -2,7 +2,7 @@
 
 """
 Copyright (c) 2006-2017 sqlmap developers (http://sqlmap.org/)
-See the file 'doc/COPYING' for copying permission
+See the file 'LICENSE' for copying permission
 """
 
 import os
@@ -149,8 +149,8 @@ def cmdLineParser(argv=None):
         request.add_option("--auth-file", dest="authFile",
                            help="HTTP authentication PEM cert/private key file")
 
-        request.add_option("--ignore-401", dest="ignore401", action="store_true",
-                          help="Ignore HTTP Error 401 (Unauthorized)")
+        request.add_option("--ignore-code", dest="ignoreCode", type="int",
+                          help="Ignore HTTP error code (e.g. 401)")
 
         request.add_option("--ignore-proxy", dest="ignoreProxy", action="store_true",
                            help="Ignore system default proxy settings")
@@ -631,9 +631,6 @@ def cmdLineParser(argv=None):
         general.add_option("--binary-fields", dest="binaryFields",
                           help="Result fields having binary values (e.g. \"digest\")")
 
-        general.add_option("--charset", dest="charset",
-                            help="Force character encoding used for data retrieval")
-
         general.add_option("--check-internet", dest="checkInternet",
                             action="store_true",
                             help="Check Internet connection before assessing the target")
@@ -648,8 +645,14 @@ def cmdLineParser(argv=None):
                                   help="Delimiting character used in CSV output "
                                   "(default \"%s\")" % defaults.csvDel)
 
+        general.add_option("--charset", dest="charset",
+                           help="Blind SQL injection charset (e.g. \"0123456789abcdef\")")
+
         general.add_option("--dump-format", dest="dumpFormat",
                                   help="Format of dumped data (CSV (default), HTML or SQLITE)")
+
+        general.add_option("--encoding", dest="encoding",
+                            help="Character encoding used for data retrieval (e.g. GBK)")
 
         general.add_option("--eta", dest="eta",
                             action="store_true",
@@ -780,6 +783,9 @@ def cmdLineParser(argv=None):
                           help=SUPPRESS_HELP)
 
         parser.add_option("--profile", dest="profile", action="store_true",
+                          help=SUPPRESS_HELP)
+
+        parser.add_option("--force-dbms", dest="forceDbms",
                           help=SUPPRESS_HELP)
 
         parser.add_option("--force-dns", dest="forceDns", action="store_true",

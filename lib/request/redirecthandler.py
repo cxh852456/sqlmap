@@ -2,7 +2,7 @@
 
 """
 Copyright (c) 2006-2017 sqlmap developers (http://sqlmap.org/)
-See the file 'doc/COPYING' for copying permission
+See the file 'LICENSE' for copying permission
 """
 
 import re
@@ -129,7 +129,7 @@ class SmartRedirectHandler(urllib2.HTTPRedirectHandler):
                 if HTTP_HEADER.COOKIE not in req.headers:
                     req.headers[HTTP_HEADER.COOKIE] = _
                 else:
-                    req.headers[HTTP_HEADER.COOKIE] = re.sub("%s{2,}" % delimiter, delimiter, ("%s%s%s" % (re.sub(r"\b%s=[^%s]*%s?" % (_.split('=')[0], delimiter, delimiter), "", req.headers[HTTP_HEADER.COOKIE]), delimiter, _)).strip(delimiter))
+                    req.headers[HTTP_HEADER.COOKIE] = re.sub(r"%s{2,}" % delimiter, delimiter, ("%s%s%s" % (re.sub(r"\b%s=[^%s]*%s?" % (re.escape(_.split('=')[0]), delimiter, delimiter), "", req.headers[HTTP_HEADER.COOKIE]), delimiter, _)).strip(delimiter))
             try:
                 result = urllib2.HTTPRedirectHandler.http_error_302(self, req, fp, code, msg, headers)
             except urllib2.HTTPError, e:

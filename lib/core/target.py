@@ -2,7 +2,7 @@
 
 """
 Copyright (c) 2006-2017 sqlmap developers (http://sqlmap.org/)
-See the file 'doc/COPYING' for copying permission
+See the file 'LICENSE' for copying permission
 """
 
 import codecs
@@ -120,7 +120,7 @@ def _setRequestParams():
         if kb.processUserMarks is None and kb.customInjectionMark in conf.data:
             message = "custom injection marker ('%s') found in option " % kb.customInjectionMark
             message += "'--data'. Do you want to process it? [Y/n/q] "
-            choice = readInput(message, default='Y')
+            choice = readInput(message, default='Y').upper()
 
             if choice == 'Q':
                 raise SqlmapUserQuitException
@@ -133,7 +133,7 @@ def _setRequestParams():
         if re.search(JSON_RECOGNITION_REGEX, conf.data):
             message = "JSON data found in %s data. " % conf.method
             message += "Do you want to process it? [Y/n/q] "
-            choice = readInput(message, default='Y')
+            choice = readInput(message, default='Y').upper()
 
             if choice == 'Q':
                 raise SqlmapUserQuitException
@@ -141,8 +141,9 @@ def _setRequestParams():
                 if not (kb.processUserMarks and kb.customInjectionMark in conf.data):
                     conf.data = getattr(conf.data, UNENCODED_ORIGINAL_VALUE, conf.data)
                     conf.data = conf.data.replace(kb.customInjectionMark, ASTERISK_MARKER)
-                    conf.data = re.sub(r'("(?P<name>[^"]+)"\s*:\s*"[^"]+)"', functools.partial(process, repl=r'\g<1>%s"' % kb.customInjectionMark), conf.data)
-                    conf.data = re.sub(r'("(?P<name>[^"]+)"\s*:\s*)(-?\d[\d\.]*\b)', functools.partial(process, repl=r'\g<0>%s' % kb.customInjectionMark), conf.data)
+                    conf.data = re.sub(r'("(?P<name>[^"]+)"\s*:\s*"[^"]*)"', functools.partial(process, repl=r'\g<1>%s"' % kb.customInjectionMark), conf.data)
+                    conf.data = re.sub(r'("(?P<name>[^"]+)"\s*:\s*)(-?\d[\d\.]*)\b', functools.partial(process, repl=r'\g<1>\g<3>%s' % kb.customInjectionMark), conf.data)
+                    conf.data = re.sub(r'("(?P<name>[^"]+)"\s*:\s*)((true|false|null))\b', functools.partial(process, repl=r'\g<1>\g<3>%s' % kb.customInjectionMark), conf.data)
                     match = re.search(r'(?P<name>[^"]+)"\s*:\s*\[([^\]]+)\]', conf.data)
                     if match and not (conf.testParameter and match.group("name") not in conf.testParameter):
                         _ = match.group(2)
@@ -208,7 +209,7 @@ def _setRequestParams():
                 if not (kb.processUserMarks and kb.customInjectionMark in conf.data):
                     conf.data = getattr(conf.data, UNENCODED_ORIGINAL_VALUE, conf.data)
                     conf.data = conf.data.replace(kb.customInjectionMark, ASTERISK_MARKER)
-                    conf.data = re.sub(r"(?si)((Content-Disposition[^\n]+?name\s*=\s*[\"'](?P<name>[^\n]+?)[\"']).+?)(((\r)?\n)+--)", functools.partial(process, repl=r"\g<1>%s\g<4>" % kb.customInjectionMark), conf.data)
+                    conf.data = re.sub(r"(?si)((Content-Disposition[^\n]+?name\s*=\s*[\"']?(?P<name>[^\"'\r\n]+)[\"']?).+?)(((\r)?\n)+--)", functools.partial(process, repl=r"\g<1>%s\g<4>" % kb.customInjectionMark), conf.data)
 
                 kb.postHint = POST_HINT.MULTIPART
 
@@ -544,7 +545,7 @@ def _setResultsFile():
     if not conf.resultsFP:
         conf.resultsFilename = os.path.join(paths.SQLMAP_OUTPUT_PATH, time.strftime(RESULTS_FILE_FORMAT).lower())
         try:
-            conf.resultsFP = openFile(conf.resultsFilename, "w+", UNICODE_ENCODING, buffering=0)
+            conf.resultsFP = openFile(conf.resultsFilename, "a", UNICODE_ENCODING, buffering=0)
         except (OSError, IOError), ex:
             try:
                 warnMsg = "unable to create results file '%s' ('%s'). " % (conf.resultsFilename, getUnicode(ex))
@@ -647,25 +648,25 @@ def _createTargetDirs():
 
     conf.outputPath = os.path.join(getUnicode(paths.SQLMAP_OUTPUT_PATH), normalizeUnicode(getUnicode(conf.hostname)))
 
-    if not os.path.isdir(conf.outputPath):
-        try:
+    try:
+        if not os.path.isdir(conf.outputPath):
             os.makedirs(conf.outputPath, 0755)
-        except (OSError, IOError), ex:
-            try:
-                tempDir = tempfile.mkdtemp(prefix="sqlmapoutput")
-            except Exception, _:
-                errMsg = "unable to write to the temporary directory ('%s'). " % _
-                errMsg += "Please make sure that your disk is not full and "
-                errMsg += "that you have sufficient write permissions to "
-                errMsg += "create temporary files and/or directories"
-                raise SqlmapSystemException(errMsg)
+    except (OSError, IOError, TypeError), ex:
+        try:
+            tempDir = tempfile.mkdtemp(prefix="sqlmapoutput")
+        except Exception, _:
+            errMsg = "unable to write to the temporary directory ('%s'). " % _
+            errMsg += "Please make sure that your disk is not full and "
+            errMsg += "that you have sufficient write permissions to "
+            errMsg += "create temporary files and/or directories"
+            raise SqlmapSystemException(errMsg)
 
-            warnMsg = "unable to create output directory "
-            warnMsg += "'%s' (%s). " % (conf.outputPath, getUnicode(ex))
-            warnMsg += "Using temporary directory '%s' instead" % getUnicode(tempDir)
-            logger.warn(warnMsg)
+        warnMsg = "unable to create output directory "
+        warnMsg += "'%s' (%s). " % (conf.outputPath, getUnicode(ex))
+        warnMsg += "Using temporary directory '%s' instead" % getUnicode(tempDir)
+        logger.warn(warnMsg)
 
-            conf.outputPath = tempDir
+        conf.outputPath = tempDir
 
     try:
         with codecs.open(os.path.join(conf.outputPath, "target.txt"), "w+", UNICODE_ENCODING) as f:

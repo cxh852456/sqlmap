@@ -2,7 +2,7 @@
 
 """
 Copyright (c) 2006-2017 sqlmap developers (http://sqlmap.org/)
-See the file 'doc/COPYING' for copying permission
+See the file 'LICENSE' for copying permission
 """
 
 import os
@@ -54,6 +54,7 @@ from lib.core.exception import SqlmapBaseException
 from lib.core.exception import SqlmapNoneDataException
 from lib.core.exception import SqlmapNotVulnerableException
 from lib.core.exception import SqlmapSilentQuitException
+from lib.core.exception import SqlmapSkipTargetException
 from lib.core.exception import SqlmapValueException
 from lib.core.exception import SqlmapUserQuitException
 from lib.core.settings import ASP_NET_CONTROL_REGEX
@@ -241,11 +242,13 @@ def _saveToResultsFile():
     for key, value in results.items():
         place, parameter, notes = key
         line = "%s,%s,%s,%s,%s%s" % (safeCSValue(kb.originalUrls.get(conf.url) or conf.url), place, parameter, "".join(techniques[_][0].upper() for _ in sorted(value)), notes, os.linesep)
-        conf.resultsFP.writelines(line)
+        conf.resultsFP.write(line)
 
     if not results:
         line = "%s,,,,%s" % (conf.url, os.linesep)
-        conf.resultsFP.writelines(line)
+        conf.resultsFP.write(line)
+
+    conf.resultsFP.flush()
 
 def start():
     """
@@ -665,6 +668,9 @@ def start():
                     raise SqlmapUserQuitException
             else:
                 raise
+
+        except SqlmapSkipTargetException:
+            pass
 
         except SqlmapUserQuitException:
             raise

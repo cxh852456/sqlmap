@@ -2,7 +2,7 @@
 
 """
 Copyright (c) 2006-2017 sqlmap developers (http://sqlmap.org/)
-See the file 'doc/COPYING' for copying permission
+See the file 'LICENSE' for copying permission
 """
 
 import re
@@ -18,6 +18,7 @@ def detect(get_page):
     for vector in WAF_ATTACK_VECTORS:
         _, headers, _ = get_page(get=vector)
         retval = headers.get("X-Cnection", "").lower() == "close"
+        retval |= headers.get("X-WA-Info") is not None
         retval |= re.search(r"\ATS\w{4,}=", headers.get(HTTP_HEADER.SET_COOKIE, ""), re.I) is not None
         retval |= re.search(r"BigIP|BIGipServer", headers.get(HTTP_HEADER.SET_COOKIE, ""), re.I) is not None
         retval |= re.search(r"BigIP|BIGipServer", headers.get(HTTP_HEADER.SERVER, ""), re.I) is not None

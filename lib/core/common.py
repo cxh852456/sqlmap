@@ -2,7 +2,7 @@
 
 """
 Copyright (c) 2006-2017 sqlmap developers (http://sqlmap.org/)
-See the file 'doc/COPYING' for copying permission
+See the file 'LICENSE' for copying permission
 """
 
 import codecs
@@ -28,6 +28,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import urllib
 import urllib2
 import urlparse
@@ -102,8 +103,9 @@ from lib.core.settings import CUSTOM_INJECTION_MARK_CHAR
 from lib.core.settings import DEFAULT_COOKIE_DELIMITER
 from lib.core.settings import DEFAULT_GET_POST_DELIMITER
 from lib.core.settings import DEFAULT_MSSQL_SCHEMA
+from lib.core.settings import DEV_EMAIL_ADDRESS
 from lib.core.settings import DUMMY_USER_INJECTION
-from lib.core.settings import DYNAMICITY_MARK_LENGTH
+from lib.core.settings import DYNAMICITY_BOUNDARY_LENGTH
 from lib.core.settings import ERROR_PARSING_REGEXES
 from lib.core.settings import FILE_PATH_REGEXES
 from lib.core.settings import FORCE_COOKIE_EXPIRATION_TIME
@@ -143,6 +145,7 @@ from lib.core.settings import REFLECTED_REPLACEMENT_REGEX
 from lib.core.settings import REFLECTED_REPLACEMENT_TIMEOUT
 from lib.core.settings import REFLECTED_VALUE_MARKER
 from lib.core.settings import REFLECTIVE_MISS_THRESHOLD
+from lib.core.settings import SAFE_VARIABLE_MARKER
 from lib.core.settings import SENSITIVE_DATA_REGEX
 from lib.core.settings import SENSITIVE_OPTIONS
 from lib.core.settings import SUPPORTED_DBMS
@@ -435,7 +438,7 @@ class Backend:
     # Get methods
     @staticmethod
     def getForcedDbms():
-        return aliasToDbmsEnum(kb.get("forcedDbms"))
+        return aliasToDbmsEnum(conf.get("forceDbms")) or aliasToDbmsEnum(kb.get("forcedDbms"))
 
     @staticmethod
     def getDbms():
@@ -635,7 +638,7 @@ def paramToDict(place, parameters=None):
                                                     current[key] = "%s%s" % (str(value).lower(), BOUNDED_INJECTION_MARKER)
                                                 else:
                                                     current[key] = "%s%s" % (value, BOUNDED_INJECTION_MARKER)
-                                                candidates["%s (%s)" % (parameter, key)] = re.sub("(%s\s*=\s*)%s" % (re.escape(parameter), re.escape(testableParameters[parameter])), r"\g<1>%s" % json.dumps(deserialized), parameters)
+                                                candidates["%s (%s)" % (parameter, key)] = re.sub(r"\b(%s\s*=\s*)%s" % (re.escape(parameter), re.escape(testableParameters[parameter])), r"\g<1>%s" % json.dumps(deserialized), parameters)
                                                 current[key] = original
 
                                 deserialized = json.loads(testableParameters[parameter])
@@ -654,12 +657,12 @@ def paramToDict(place, parameters=None):
                             except Exception:
                                 pass
 
-                            _ = re.sub(regex, "\g<1>%s\g<%d>" % (kb.customInjectionMark, len(match.groups())), testableParameters[parameter])
+                            _ = re.sub(regex, r"\g<1>%s\g<%d>" % (kb.customInjectionMark, len(match.groups())), testableParameters[parameter])
                             message = "it appears that provided value for %s parameter '%s' " % (place, parameter)
                             message += "has boundaries. Do you want to inject inside? ('%s') [y/N] " % getUnicode(_)
 
                             if readInput(message, default='N', boolean=True):
-                                testableParameters[parameter] = re.sub(regex, "\g<1>%s\g<2>" % BOUNDED_INJECTION_MARKER, testableParameters[parameter])
+                                testableParameters[parameter] = re.sub(r"\b(%s\s*=\s*)%s" % (re.escape(parameter), re.escape(testableParameters[parameter])), (r"\g<1>%s" % re.sub(regex, r"\g<1>%s\g<2>" % BOUNDED_INJECTION_MARKER, testableParameters[parameter])).replace("\\", r"\\"), parameters)
                             break
 
     if conf.testParameter:
@@ -1139,6 +1142,9 @@ def checkFile(filename, raiseOnError=True):
 
     valid = True
 
+    if filename:
+        filename = filename.strip('"\'')
+
     try:
         if filename is None or not os.path.isfile(filename):
             valid = False
@@ -1197,16 +1203,20 @@ def parsePasswordHash(password):
 def cleanQuery(query):
     """
     Switch all SQL statement (alike) keywords to upper case
+
+    >>> cleanQuery("select id from users")
+    'SELECT id FROM users'
     """
 
     retVal = query
 
     for sqlStatements in SQL_STATEMENTS.values():
         for sqlStatement in sqlStatements:
-            queryMatch = re.search("(?i)\b(%s)\b" % sqlStatement.replace("(", "").replace(")", "").strip(), query)
+            candidate = sqlStatement.replace("(", "").replace(")", "").strip()
+            queryMatch = re.search(r"(?i)\b(%s)\b" % candidate, query)
 
             if queryMatch and "sys_exec" not in query:
-                retVal = retVal.replace(queryMatch.group(1), sqlStatement.upper())
+                retVal = retVal.replace(queryMatch.group(1), candidate.upper())
 
     return retVal
 
@@ -1361,7 +1371,7 @@ def parseTargetDirect():
                     import pyodbc
                 elif dbmsName == DBMS.FIREBIRD:
                     import kinterbasdb
-            except ImportError:
+            except:
                 if _sqlalchemy and data[3] in _sqlalchemy.dialects.__all__:
                     pass
                 else:
@@ -1382,13 +1392,12 @@ def parseTargetUrl():
 
     originalUrl = conf.url
 
-    if re.search("\[.+\]", conf.url) and not socket.has_ipv6:
+    if re.search(r"\[.+\]", conf.url) and not socket.has_ipv6:
         errMsg = "IPv6 addressing is not supported "
         errMsg += "on this platform"
         raise SqlmapGenericException(errMsg)
 
-    if not re.search("^http[s]*://", conf.url, re.I) and \
-            not re.search("^ws[s]*://", conf.url, re.I):
+    if not re.search(r"^http[s]*://", conf.url, re.I) and not re.search(r"^ws[s]*://", conf.url, re.I):
         if ":443/" in conf.url:
             conf.url = "https://" + conf.url
         else:
@@ -1405,9 +1414,9 @@ def parseTargetUrl():
         errMsg += "in the hostname part"
         raise SqlmapGenericException(errMsg)
 
-    hostnamePort = urlSplit.netloc.split(":") if not re.search("\[.+\]", urlSplit.netloc) else filter(None, (re.search("\[.+\]", urlSplit.netloc).group(0), re.search("\](:(?P<port>\d+))?", urlSplit.netloc).group("port")))
+    hostnamePort = urlSplit.netloc.split(":") if not re.search(r"\[.+\]", urlSplit.netloc) else filter(None, (re.search("\[.+\]", urlSplit.netloc).group(0), re.search(r"\](:(?P<port>\d+))?", urlSplit.netloc).group("port")))
 
-    conf.scheme = urlSplit.scheme.strip().lower() if not conf.forceSSL else "https"
+    conf.scheme = (urlSplit.scheme.strip().lower() or "http") if not conf.forceSSL else "https"
     conf.path = urlSplit.path.strip()
     conf.hostname = hostnamePort[0].strip()
 
@@ -1421,7 +1430,7 @@ def parseTargetUrl():
     except UnicodeError:
         _ = None
 
-    if any((_ is None, re.search(r'\s', conf.hostname), '..' in conf.hostname, conf.hostname.startswith('.'), '\n' in originalUrl)):
+    if any((_ is None, re.search(r"\s", conf.hostname), '..' in conf.hostname, conf.hostname.startswith('.'), '\n' in originalUrl)):
         errMsg = "invalid target URL ('%s')" % originalUrl
         raise SqlmapSyntaxException(errMsg)
 
@@ -1471,15 +1480,16 @@ def expandAsteriskForColumns(expression):
     the SQL query string (expression)
     """
 
-    asterisk = re.search("^SELECT(\s+TOP\s+[\d]+)?\s+\*\s+FROM\s+`?([^`\s()]+)", expression, re.I)
+    asterisk = re.search(r"(?i)\ASELECT(\s+TOP\s+[\d]+)?\s+\*\s+FROM\s+`?([^`\s()]+)", expression)
 
     if asterisk:
         infoMsg = "you did not provide the fields in your query. "
         infoMsg += "sqlmap will retrieve the column names itself"
         logger.info(infoMsg)
 
-        _ = asterisk.group(2).replace("..", ".").replace(".dbo.", ".")
-        db, conf.tbl = _.split(".", 1) if '.' in _ else (None, _)
+        _ = asterisk.group(2).replace("..", '.').replace(".dbo.", '.')
+        db, conf.tbl = _.split('.', 1) if '.' in _ else (None, _)
+
         if db is None:
             if expression != conf.query:
                 conf.db = db
@@ -1487,6 +1497,7 @@ def expandAsteriskForColumns(expression):
                 expression = re.sub(r"([^\w])%s" % re.escape(conf.tbl), "\g<1>%s.%s" % (conf.db, conf.tbl), expression)
         else:
             conf.db = db
+
         conf.db = safeSQLIdentificatorNaming(conf.db)
         conf.tbl = safeSQLIdentificatorNaming(conf.tbl, True)
 
@@ -1496,7 +1507,7 @@ def expandAsteriskForColumns(expression):
             columns = columnsDict[conf.db][conf.tbl].keys()
             columns.sort()
             columnsStr = ", ".join(column for column in columns)
-            expression = expression.replace("*", columnsStr, 1)
+            expression = expression.replace('*', columnsStr, 1)
 
             infoMsg = "the query with expanded column name(s) is: "
             infoMsg += "%s" % expression
@@ -1515,15 +1526,24 @@ def getLimitRange(count, plusOne=False):
     retVal = None
     count = int(count)
     limitStart, limitStop = 1, count
+    reverse = False
 
     if kb.dumpTable:
-        if isinstance(conf.limitStop, int) and conf.limitStop > 0 and conf.limitStop < limitStop:
-            limitStop = conf.limitStop
+        if conf.limitStart and conf.limitStop and conf.limitStart > conf.limitStop:
+            limitStop = conf.limitStart
+            limitStart = conf.limitStop
+            reverse = True
+        else:
+            if isinstance(conf.limitStop, int) and conf.limitStop > 0 and conf.limitStop < limitStop:
+                limitStop = conf.limitStop
 
-        if isinstance(conf.limitStart, int) and conf.limitStart > 0 and conf.limitStart <= limitStop:
-            limitStart = conf.limitStart
+            if isinstance(conf.limitStart, int) and conf.limitStart > 0 and conf.limitStart <= limitStop:
+                limitStart = conf.limitStart
 
     retVal = xrange(limitStart, limitStop + 1) if plusOne else xrange(limitStart - 1, limitStop)
+
+    if reverse:
+        retVal = xrange(retVal[-1], retVal[0] - 1, -1)
 
     return retVal
 
@@ -1535,7 +1555,7 @@ def parseUnionPage(page):
     if page is None:
         return None
 
-    if re.search("(?si)\A%s.*%s\Z" % (kb.chars.start, kb.chars.stop), page):
+    if re.search(r"(?si)\A%s.*%s\Z" % (kb.chars.start, kb.chars.stop), page):
         if len(page) > LARGE_OUTPUT_THRESHOLD:
             warnMsg = "large output detected. This might take a while"
             logger.warn(warnMsg)
@@ -1543,7 +1563,7 @@ def parseUnionPage(page):
         data = BigArray()
         keys = set()
 
-        for match in re.finditer("%s(.*?)%s" % (kb.chars.start, kb.chars.stop), page, re.DOTALL | re.IGNORECASE):
+        for match in re.finditer(r"%s(.*?)%s" % (kb.chars.start, kb.chars.stop), page, re.DOTALL | re.IGNORECASE):
             entry = match.group(1)
 
             if kb.chars.start in entry:
@@ -1634,11 +1654,11 @@ def getFileType(filePath):
     """
 
     try:
-        _ = magic.from_file(filePath)
+        desc = magic.from_file(filePath) or ""
     except:
         return "unknown"
 
-    return "text" if "ASCII" in _ or "text" in _ else "binary"
+    return "text" if any(_ in desc.lower() for _ in ("ascii", "text")) else "binary"
 
 def getCharset(charsetType=None):
     """
@@ -1654,14 +1674,14 @@ def getCharset(charsetType=None):
     if charsetType is None:
         asciiTbl.extend(xrange(0, 128))
 
-    # 0 or 1
+    # Binary
     elif charsetType == CHARSET_TYPE.BINARY:
         asciiTbl.extend([0, 1])
         asciiTbl.extend(xrange(47, 50))
 
     # Digits
     elif charsetType == CHARSET_TYPE.DIGITS:
-        asciiTbl.extend([0, 1])
+        asciiTbl.extend([0, 9])
         asciiTbl.extend(xrange(47, 58))
 
     # Hexadecimal
@@ -1708,14 +1728,14 @@ def normalizePath(filepath):
     Returns normalized string representation of a given filepath
 
     >>> normalizePath('//var///log/apache.log')
-    '//var/log/apache.log'
+    '/var/log/apache.log'
     """
 
     retVal = filepath
 
     if retVal:
         retVal = retVal.strip("\r\n")
-        retVal = ntpath.normpath(retVal) if isWindowsDriveLetterPath(retVal) else posixpath.normpath(retVal)
+        retVal = ntpath.normpath(retVal) if isWindowsDriveLetterPath(retVal) else re.sub(r"\A/{2,}", "/", posixpath.normpath(retVal))
 
     return retVal
 
@@ -1753,7 +1773,7 @@ def safeStringFormat(format_, params):
     if isinstance(params, basestring):
         retVal = retVal.replace("%s", params, 1)
     elif not isListLike(params):
-        retVal = retVal.replace("%s", str(params), 1)
+        retVal = retVal.replace("%s", getUnicode(params), 1)
     else:
         start, end = 0, len(retVal)
         match = re.search(r"%s(.+)%s" % (PAYLOAD_DELIMITER, PAYLOAD_DELIMITER), retVal)
@@ -1779,7 +1799,7 @@ def safeStringFormat(format_, params):
                 if match:
                     if count >= len(params):
                         warnMsg = "wrong number of parameters during string formatting. "
-                        warnMsg += "Please report by e-mail content \"%r | %r | %r\" to 'dev@sqlmap.org'" % (format_, params, retVal)
+                        warnMsg += "Please report by e-mail content \"%r | %r | %r\" to '%s'" % (format_, params, retVal, DEV_EMAIL_ADDRESS)
                         raise SqlmapValueException(warnMsg)
                     else:
                         retVal = re.sub(r"(\A|[^A-Za-z0-9])(%s)([^A-Za-z0-9]|\Z)", r"\g<1>%s\g<3>" % params[count], retVal, 1)
@@ -1869,7 +1889,7 @@ def isWindowsDriveLetterPath(filepath):
     False
     """
 
-    return re.search("\A[\w]\:", filepath) is not None
+    return re.search(r"\A[\w]\:", filepath) is not None
 
 def posixToNtSlashes(filepath):
     """
@@ -1985,7 +2005,7 @@ def getSQLSnippet(dbms, sfile, **variables):
     retVal = re.sub(r";\s+", "; ", retVal).strip("\r\n")
 
     for _ in variables.keys():
-        retVal = re.sub(r"%%%s%%" % _, variables[_], retVal)
+        retVal = re.sub(r"%%%s%%" % _, variables[_].replace('\\', r'\\'), retVal)
 
     for _ in re.findall(r"%RANDSTR\d+%", retVal, re.I):
         retVal = retVal.replace(_, randomStr())
@@ -2038,6 +2058,7 @@ def readXmlFile(xmlFile):
 
     return retVal
 
+@cachedmethod
 def stdev(values):
     """
     Computes standard deviation of a list of numbers.
@@ -2049,19 +2070,10 @@ def stdev(values):
 
     if not values or len(values) < 2:
         return None
-
-    key = (values[0], values[-1], len(values))
-
-    if kb.get("cache") and key in kb.cache.stdev:
-        retVal = kb.cache.stdev[key]
     else:
         avg = average(values)
         _ = reduce(lambda x, y: x + pow((y or 0) - avg, 2), values, 0.0)
-        retVal = sqrt(_ / (len(values) - 1))
-        if kb.get("cache"):
-            kb.cache.stdev[key] = retVal
-
-    return retVal
+        return sqrt(_ / (len(values) - 1))
 
 def average(values):
     """
@@ -2111,6 +2123,9 @@ def getFileItems(filename, commentPrefix='#', unicode_=True, lowercase=False, un
     """
 
     retVal = list() if not unique else OrderedDict()
+
+    if filename:
+        filename = filename.strip('"\'')
 
     checkFile(filename)
 
@@ -2218,7 +2233,7 @@ def goGoodSamaritan(prevValue, originalCharset):
 def getPartRun(alias=True):
     """
     Goes through call stack and finds constructs matching conf.dbmsHandler.*.
-    Returns it or its alias used in txt/common-outputs.txt
+    Returns it or its alias used in 'txt/common-outputs.txt'
     """
 
     retVal = None
@@ -2314,7 +2329,7 @@ def longestCommonPrefix(*sequences):
     return sequences[0]
 
 def commonFinderOnly(initial, sequence):
-    return longestCommonPrefix(*filter(lambda x: x.startswith(initial), sequence))
+    return longestCommonPrefix(*filter(lambda _: _.startswith(initial), sequence))
 
 def pushValue(value):
     """
@@ -2412,7 +2427,7 @@ def adjustTimeDelay(lastQueryDuration, lowerStdLimit):
     if candidate:
         kb.delayCandidates = [candidate] + kb.delayCandidates[:-1]
 
-        if all((x == candidate for x in kb.delayCandidates)) and candidate < conf.timeSec:
+        if all((_ == candidate for _ in kb.delayCandidates)) and candidate < conf.timeSec:
             conf.timeSec = candidate
 
             infoMsg = "adjusting time delay to "
@@ -2476,6 +2491,9 @@ def findLocalPort(ports):
 def findMultipartPostBoundary(post):
     """
     Finds value for a boundary parameter in given multipart POST body
+
+    >>> findMultipartPostBoundary("-----------------------------9051914041544843365972754266\\nContent-Disposition: form-data; name=text\\n\\ndefault")
+    '9051914041544843365972754266'
     """
 
     retVal = None
@@ -2524,8 +2542,8 @@ def urldecode(value, encoding=None, unsafe="%%&=;+%s" % CUSTOM_INJECTION_MARK_CH
                     return char if char in charset else match.group(0)
                 result = value
                 if plusspace:
-                    result = result.replace("+", " ")  # plus sign has a special meaning in URL encoded data (hence the usage of urllib.unquote_plus in convall case)
-                result = re.sub("%([0-9a-fA-F]{2})", _, result)
+                    result = result.replace('+', ' ')  # plus sign has a special meaning in URL encoded data (hence the usage of urllib.unquote_plus in convall case)
+                result = re.sub(r"%([0-9a-fA-F]{2})", _, result)
 
     if isinstance(result, str):
         result = unicode(result, encoding or UNICODE_ENCODING, "replace")
@@ -2560,7 +2578,7 @@ def urlencode(value, safe="%&=-_", convall=False, limit=False, spaceplus=False):
         # encoded (when not representing URL encoded char)
         # except in cases when tampering scripts are used
         if all('%' in _ for _ in (safe, value)) and not kb.tamperFunctions:
-            value = re.sub("%(?![0-9a-fA-F]{2})", "%25", value)
+            value = re.sub(r"%(?![0-9a-fA-F]{2})", "%25", value)
 
         while True:
             result = urllib.quote(utf8encode(value), safe)
@@ -2665,6 +2683,7 @@ def enumValueToNameLookup(type_, value_):
 
     return retVal
 
+@cachedmethod
 def extractRegexResult(regex, content, flags=0):
     """
     Returns 'result' group value from a possible match with regex on a given
@@ -2757,13 +2776,17 @@ def findDynamicContent(firstPage, secondPage):
     """
     This function checks if the provided pages have dynamic content. If they
     are dynamic, proper markings will be made
+
+    >>> findDynamicContent("Lorem ipsum dolor sit amet, congue tation referrentur ei sed. Ne nec legimus habemus recusabo, natum reque et per. Facer tritani reprehendunt eos id, modus constituam est te. Usu sumo indoctum ad, pri paulo molestiae complectitur no.", "Lorem ipsum dolor sit amet, congue tation referrentur ei sed. Ne nec legimus habemus recusabo, natum reque et per. <script src='ads.js'></script>Facer tritani reprehendunt eos id, modus constituam est te. Usu sumo indoctum ad, pri paulo molestiae complectitur no.")
+    >>> kb.dynamicMarkings
+    [('natum reque et per. ', 'Facer tritani repreh')]
     """
 
     if not firstPage or not secondPage:
         return
 
     infoMsg = "searching for dynamic content"
-    logger.info(infoMsg)
+    singleTimeLogMessage(infoMsg)
 
     blocks = SequenceMatcher(None, firstPage, secondPage).get_matching_blocks()
     kb.dynamicMarkings = []
@@ -2772,7 +2795,7 @@ def findDynamicContent(firstPage, secondPage):
     for block in blocks[:]:
         (_, _, length) = block
 
-        if length <= DYNAMICITY_MARK_LENGTH:
+        if length <= 2 * DYNAMICITY_BOUNDARY_LENGTH:
             blocks.remove(block)
 
     # Making of dynamic markings based on prefix/suffix principle
@@ -2790,14 +2813,23 @@ def findDynamicContent(firstPage, secondPage):
             if suffix is None and (blocks[i][0] + blocks[i][2] >= len(firstPage)):
                 continue
 
-            prefix = trimAlphaNum(prefix)
-            suffix = trimAlphaNum(suffix)
+            if prefix and suffix:
+                prefix = prefix[-DYNAMICITY_BOUNDARY_LENGTH:]
+                suffix = suffix[:DYNAMICITY_BOUNDARY_LENGTH]
 
-            kb.dynamicMarkings.append((prefix[-DYNAMICITY_MARK_LENGTH / 2:] if prefix else None, suffix[:DYNAMICITY_MARK_LENGTH / 2] if suffix else None))
+                infix = max(re.search(r"(?s)%s(.+)%s" % (re.escape(prefix), re.escape(suffix)), _) for _ in (firstPage, secondPage)).group(1)
+
+                if infix[0].isalnum():
+                    prefix = trimAlphaNum(prefix)
+
+                if infix[-1].isalnum():
+                    suffix = trimAlphaNum(suffix)
+
+            kb.dynamicMarkings.append((prefix if prefix else None, suffix if suffix else None))
 
     if len(kb.dynamicMarkings) > 0:
         infoMsg = "dynamic content marked for removal (%d region%s)" % (len(kb.dynamicMarkings), 's' if len(kb.dynamicMarkings) > 1 else '')
-        logger.info(infoMsg)
+        singleTimeLogMessage(infoMsg)
 
 def removeDynamicContent(page):
     """
@@ -2925,8 +2957,8 @@ def isStackingAvailable():
         retVal = True
     else:
         for technique in getPublicTypeMembers(PAYLOAD.TECHNIQUE, True):
-            _ = getTechniqueData(technique)
-            if _ and "stacked" in _["title"].lower():
+            data = getTechniqueData(technique)
+            if data and "stacked" in data["title"].lower():
                 retVal = True
                 break
 
@@ -2988,7 +3020,7 @@ def saveConfig(conf, filename):
                     if option in defaults:
                         value = str(defaults[option])
                     else:
-                        value = "0"
+                        value = '0'
                 elif datatype == OPTION_TYPE.STRING:
                     value = ""
 
@@ -3112,7 +3144,7 @@ def getSortedInjectionTests():
         if test.stype == PAYLOAD.TECHNIQUE.UNION:
             retVal = SORT_ORDER.LAST
 
-        elif 'details' in test and 'dbms' in test.details:
+        elif "details" in test and "dbms" in test.details:
             if intersect(test.details.dbms, Backend.getIdentifiedDbms()):
                 retVal = SORT_ORDER.SECOND
             else:
@@ -3191,14 +3223,14 @@ def decodeIntToUnicode(value):
                 raw = hexdecode(_)
 
                 if Backend.isDbms(DBMS.MYSQL):
-                    # https://github.com/sqlmapproject/sqlmap/issues/1531
-                    retVal = getUnicode(raw, conf.charset or UNICODE_ENCODING)
+                    # Note: https://github.com/sqlmapproject/sqlmap/issues/1531
+                    retVal = getUnicode(raw, conf.encoding or UNICODE_ENCODING)
                 elif Backend.isDbms(DBMS.MSSQL):
                     retVal = getUnicode(raw, "UTF-16-BE")
                 elif Backend.getIdentifiedDbms() in (DBMS.PGSQL, DBMS.ORACLE):
                     retVal = unichr(value)
                 else:
-                    retVal = getUnicode(raw, conf.charset)
+                    retVal = getUnicode(raw, conf.encoding)
             else:
                 retVal = getUnicode(chr(value))
         except:
@@ -3258,7 +3290,7 @@ def unhandledExceptionMessage():
     errMsg += "sqlmap version: %s\n" % VERSION_STRING[VERSION_STRING.find('/') + 1:]
     errMsg += "Python version: %s\n" % PYVERSION
     errMsg += "Operating system: %s\n" % PLATFORM
-    errMsg += "Command line: %s\n" % re.sub(r".+?\bsqlmap.py\b", "sqlmap.py", getUnicode(" ".join(sys.argv), encoding=sys.stdin.encoding))
+    errMsg += "Command line: %s\n" % re.sub(r".+?\bsqlmap\.py\b", "sqlmap.py", getUnicode(" ".join(sys.argv), encoding=sys.stdin.encoding))
     errMsg += "Technique: %s\n" % (enumValueToNameLookup(PAYLOAD.TECHNIQUE, kb.technique) if kb.get("technique") else ("DIRECT" if conf.get("direct") else None))
     errMsg += "Back-end DBMS:"
 
@@ -3278,11 +3310,10 @@ def createGithubIssue(errMsg, excMsg):
     Automatically create a Github issue with unhandled exception information
     """
 
-    issues = []
     try:
         issues = getFileItems(paths.GITHUB_HISTORY, unique=True)
     except:
-        pass
+        issues = []
     finally:
         issues = set(issues)
 
@@ -3353,12 +3384,15 @@ def createGithubIssue(errMsg, excMsg):
 def maskSensitiveData(msg):
     """
     Masks sensitive data in the supplied message
+
+    >>> maskSensitiveData('python sqlmap.py -u "http://www.test.com/vuln.php?id=1" --banner')
+    u'python sqlmap.py -u *********************************** --banner'
     """
 
     retVal = getUnicode(msg)
 
-    for item in filter(None, map(lambda x: conf.get(x), SENSITIVE_OPTIONS)):
-        regex = SENSITIVE_DATA_REGEX % re.sub("(\W)", r"\\\1", getUnicode(item))
+    for item in filter(None, (conf.get(_) for _ in SENSITIVE_OPTIONS)):
+        regex = SENSITIVE_DATA_REGEX % re.sub(r"(\W)", r"\\\1", getUnicode(item))
         while extractRegexResult(regex, retVal):
             value = extractRegexResult(regex, retVal)
             retVal = retVal.replace(value, '*' * len(value))
@@ -3369,7 +3403,7 @@ def maskSensitiveData(msg):
             retVal = retVal.replace(match.group(3), '*' * len(match.group(3)))
 
     if getpass.getuser():
-        retVal = re.sub(r"(?i)\b%s\b" % re.escape(getpass.getuser()), "*" * len(getpass.getuser()), retVal)
+        retVal = re.sub(r"(?i)\b%s\b" % re.escape(getpass.getuser()), '*' * len(getpass.getuser()), retVal)
 
     return retVal
 
@@ -3381,29 +3415,13 @@ def listToStrValue(value):
     '1, 2, 3'
     """
 
-    if isinstance(value, (set, tuple)):
+    if isinstance(value, (set, tuple, types.GeneratorType)):
         value = list(value)
 
     if isinstance(value, list):
         retVal = value.__str__().lstrip('[').rstrip(']')
     else:
         retVal = value
-
-    return retVal
-
-def getExceptionFrameLocals():
-    """
-    Returns dictionary with local variable content from frame
-    where exception has been raised
-    """
-
-    retVal = {}
-
-    if sys.exc_info():
-        trace = sys.exc_info()[2]
-        while trace.tb_next:
-            trace = trace.tb_next
-        retVal = trace.tb_frame.f_locals
 
     return retVal
 
@@ -3444,7 +3462,7 @@ def removeReflectiveValues(content, payload, suppressWarning=False):
                     value = value.replace(2 * REFLECTED_REPLACEMENT_REGEX, REFLECTED_REPLACEMENT_REGEX)
                 return value
 
-            payload = getUnicode(urldecode(payload.replace(PAYLOAD_DELIMITER, ''), convall=True))
+            payload = getUnicode(urldecode(payload.replace(PAYLOAD_DELIMITER, ""), convall=True))
             regex = _(filterStringValue(payload, r"[A-Za-z0-9]", REFLECTED_REPLACEMENT_REGEX.encode("string-escape")))
 
             if regex != payload:
@@ -3500,7 +3518,7 @@ def removeReflectiveValues(content, payload, suppressWarning=False):
                         warnMsg = "reflective value(s) found and filtering out"
                         singleTimeWarnMessage(warnMsg)
 
-                    if re.search(r"FRAME[^>]+src=[^>]*%s" % REFLECTED_VALUE_MARKER, retVal, re.I):
+                    if re.search(r"(?i)FRAME[^>]+src=[^>]*%s" % REFLECTED_VALUE_MARKER, retVal):
                         warnMsg = "frames detected containing attacked parameter values. Please be sure to "
                         warnMsg += "test those separately in case that attack on this page fails"
                         singleTimeWarnMessage(warnMsg)
@@ -3529,7 +3547,7 @@ def normalizeUnicode(value):
     'sucuraj'
     """
 
-    return unicodedata.normalize('NFKD', value).encode('ascii', 'ignore') if isinstance(value, unicode) else value
+    return unicodedata.normalize("NFKD", value).encode("ascii", "ignore") if isinstance(value, unicode) else value
 
 def safeSQLIdentificatorNaming(name, isTable=False):
     """
@@ -3571,11 +3589,11 @@ def unsafeSQLIdentificatorNaming(name):
     if isinstance(name, basestring):
         if Backend.getIdentifiedDbms() in (DBMS.MYSQL, DBMS.ACCESS):
             retVal = name.replace("`", "")
-        elif Backend.getIdentifiedDbms() in (DBMS.PGSQL, DBMS.DB2):
+        elif Backend.getIdentifiedDbms() in (DBMS.PGSQL, DBMS.DB2, DBMS.SQLITE, DBMS.INFORMIX, DBMS.HSQLDB):
             retVal = name.replace("\"", "")
         elif Backend.getIdentifiedDbms() in (DBMS.ORACLE,):
             retVal = name.replace("\"", "").upper()
-        elif Backend.getIdentifiedDbms() in (DBMS.MSSQL,):
+        elif Backend.getIdentifiedDbms() in (DBMS.MSSQL, DBMS.SYBASE):
             retVal = name.replace("[", "").replace("]", "")
 
         if Backend.getIdentifiedDbms() in (DBMS.MSSQL, DBMS.SYBASE):
@@ -3651,7 +3669,7 @@ def expandMnemonics(mnemonics, parser, args):
 
     for mnemonic in (mnemonics or "").split(','):
         found = None
-        name = mnemonic.split('=')[0].replace("-", "").strip()
+        name = mnemonic.split('=')[0].replace('-', "").strip()
         value = mnemonic.split('=')[1] if len(mnemonic.split('=')) > 1 else None
         pointer = head
 
@@ -3759,7 +3777,7 @@ def randomizeParameterValue(value):
 
     value = re.sub(r"%[0-9a-fA-F]{2}", "", value)
 
-    for match in re.finditer('[A-Z]+', value):
+    for match in re.finditer(r"[A-Z]+", value):
         while True:
             original = match.group()
             candidate = randomStr(len(match.group())).upper()
@@ -3768,7 +3786,7 @@ def randomizeParameterValue(value):
 
         retVal = retVal.replace(original, candidate)
 
-    for match in re.finditer('[a-z]+', value):
+    for match in re.finditer(r"[a-z]+", value):
         while True:
             original = match.group()
             candidate = randomStr(len(match.group())).lower()
@@ -3777,7 +3795,7 @@ def randomizeParameterValue(value):
 
         retVal = retVal.replace(original, candidate)
 
-    for match in re.finditer('[0-9]+', value):
+    for match in re.finditer(r"[0-9]+", value):
         while True:
             original = match.group()
             candidate = str(randomInt(len(match.group())))
@@ -4001,7 +4019,7 @@ def checkSameHost(*urls):
     elif len(urls) == 1:
         return True
     else:
-        return all(urlparse.urlparse(url or "").netloc.split(':')[0] == urlparse.urlparse(urls[0] or "").netloc.split(':')[0] for url in urls[1:])
+        return all(re.sub(r"(?i)\Awww\.", "", urlparse.urlparse(url or "").netloc.split(':')[0]) == re.sub(r"(?i)\Awww\.", "", urlparse.urlparse(urls[0] or "").netloc.split(':')[0]) for url in urls[1:])
 
 def getHostHeader(url):
     """
@@ -4016,7 +4034,7 @@ def getHostHeader(url):
     if url:
         retVal = urlparse.urlparse(url).netloc
 
-        if re.search("http(s)?://\[.+\]", url, re.I):
+        if re.search(r"http(s)?://\[.+\]", url, re.I):
             retVal = extractRegexResult("http(s)?://\[(?P<result>.+)\]", url)
         elif any(retVal.endswith(':%d' % _) for _ in (80, 443)):
             retVal = retVal.split(':')[0]
@@ -4224,8 +4242,10 @@ def hashDBRetrieve(key, unserialize=False, checkConf=False):
 
     _ = "%s%s%s" % (conf.url or "%s%s" % (conf.hostname, conf.port), key, HASHDB_MILESTONE_VALUE)
     retVal = conf.hashDB.retrieve(_, unserialize) if kb.resumeValues and not (checkConf and any((conf.flushSession, conf.freshQueries))) else None
+
     if not kb.inferenceMode and not kb.fileReadMode and isinstance(retVal, basestring) and any(_ in retVal for _ in (PARTIAL_VALUE_MARKER, PARTIAL_HEX_VALUE_MARKER)):
         retVal = None
+
     return retVal
 
 def resetCookieJar(cookieJar):
@@ -4414,3 +4434,9 @@ def getSafeExString(ex, encoding=None):
         retVal = ex.msg
 
     return getUnicode(retVal or "", encoding=encoding).strip()
+
+def safeVariableNaming(value):
+    return re.sub(r"[^\w]", lambda match: "%s%02x" % (SAFE_VARIABLE_MARKER, ord(match.group(0))), value)
+
+def unsafeVariableNaming(value):
+    return re.sub(r"%s([0-9a-f]{2})" % SAFE_VARIABLE_MARKER, lambda match: match.group(1).decode("hex"), value)
